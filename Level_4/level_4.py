@@ -2,6 +2,7 @@ import json
 import heapq
 import math
 import os
+import sys
 from collections import defaultdict, Counter
 
 # ============================================================
@@ -1314,11 +1315,14 @@ class Level4Strategy:
                 rate = self.state.get_enteloot_rate(town)
                 amount = self.state.get_enteloot_amount(town)
                 duration = 75 if self.state.has_upgrade(town, "fire-station") else 50
-                benefit_window = min(duration, remaining_ticks)
-                extra_cycles = benefit_window // rate
-                extra_enteloot = extra_cycles * amount
+                # Upkeep is worthwhile when repeated refreshes can cover at
+                # least one future Enteloot cycle. A single duration window
+                # is too conservative because refreshes may be chained.
+                future_cycles = max(0, (remaining_ticks - 5) // rate)
+                extra_enteloot = future_cycles * amount
+                refreshes = max(1, math.ceil(remaining_ticks / duration))
 
-                if extra_enteloot > 200:
+                if extra_enteloot > refreshes * 5:
                     return self.upkeep_action()
         return False
 
@@ -1589,6 +1593,27 @@ class Level4Strategy:
                 break
             self.build_remaining_production_upgrades(town)
 
+        # Construction finishes early on the wide Level 4 map. Continue the
+        # highest-margin trade loop so the remaining clock contributes to the
+        # final Enteloot total instead of being left idle.
+        if best_loop:
+            while self.state.enteloot < 450000 and self.state.tick < self.state.total_ticks:
+                self.check_and_trigger_upkeep()
+                for resource, req_qty_per_item in best_loop["inputs"].items():
+                    node = best_loop["input_nodes"][resource]
+                    needed_qty = req_qty_per_item * best_loop["quantity"]
+                    if not self.resource_planner.gather_resource(resource, needed_qty, self.actions):
+                        break
+                else:
+                    if (
+                        self.travel_to(best_loop["craft_town"], prefer_fast=True)
+                        and self.crafting.craft_good(best_loop["recipe"], best_loop["quantity"])
+                        and self.travel_to(best_loop["sell_town"], prefer_fast=True)
+                        and self.sell_good(best_loop["recipe"], best_loop["quantity"])
+                    ):
+                        continue
+                break
+
         return self.actions.actions
 
 
@@ -1598,12 +1623,13 @@ class Level4Strategy:
 
 def main():
     input_candidates = ["level4.json", "level_4.json", "4.json", "4.txt", "input.json"]
-    input_file = None
+    input_file = sys.argv[1] if len(sys.argv) > 1 else None
 
-    for filename in input_candidates:
-        if os.path.exists(filename):
-            input_file = filename
-            break
+    if input_file is None:
+        for filename in input_candidates:
+            if os.path.exists(filename):
+                input_file = filename
+                break
 
     if input_file is None:
         json_files = [f for f in os.listdir(".") if f.endswith(".json")]
@@ -1619,7 +1645,7 @@ def main():
     strategy = Level4Strategy(data)
     actions = strategy.run()
 
-    output_file = "level4_submission.txt"
+    output_file = sys.argv[2] if len(sys.argv) > 2 else "level4_submission.txt"
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump({"actions": actions}, f, indent=2)
 
