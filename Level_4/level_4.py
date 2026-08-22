@@ -4,6 +4,7 @@ import heapq
 import sys
 import os
 import time
+from pathlib import Path
 from collections import Counter, defaultdict
 
 # ============================================================
@@ -741,7 +742,13 @@ def solve(data):
     tour = []
     curr = sim.loc
     while unvisited:
-        nxt = min(unvisited, key=lambda t: sim.pathfinder.shortest_path(curr, t, has_boots=True)["time"])
+        nxt = min(
+            unvisited,
+            key=lambda t: (
+                sim.pathfinder.shortest_path(curr, t, has_boots=True)["time"],
+                t,
+            ),
+        )
         tour.append(nxt)
         unvisited.remove(nxt)
         curr = nxt
@@ -827,7 +834,8 @@ def solve(data):
 # ============================================================
 
 def main():
-    input_file = sys.argv[1] if len(sys.argv) > 1 else "4.txt"
+    level_dir = Path(__file__).resolve().parent
+    input_file = Path(sys.argv[1]) if len(sys.argv) > 1 else level_dir / "4.txt"
     data, matched_path = load_input(input_file)
 
     print("=" * 60)
@@ -841,8 +849,8 @@ def main():
     actions, tick, built, enteloot, inventory = solve(data)
     runtime = time.perf_counter() - start_time
 
-    output_file = "level4_submission.txt"
-    with open(output_file, "w", encoding="utf-8") as f:
+    output_file = level_dir / "level4_submission.txt"
+    with output_file.open("w", encoding="utf-8") as f:
         json.dump({"actions": actions}, f, indent=2)
 
     total_upgrades = sum(len(upgs) for upgs in built.values())
