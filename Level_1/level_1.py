@@ -908,8 +908,34 @@ def solve(data):
             if possible_gathers <= 0:
                 continue
 
+            # Choose the number of gathers that maximises
+            # trip value per tick rather than always using
+            # the maximum possible gathers. This balances
+            # long trips against diminishing returns.
+            best_gather = 1
+            best_vpt = 0.0
+            price = RESOURCE_SELL_PRICES.get(resource, 0)
+
+            for g in range(1, possible_gathers + 1):
+                trip_value = g * yield_amount * price
+                trip_ticks = (
+                    travel_to_ticks
+                    + (g * gather_time)
+                    + return_ticks
+                    + 1
+                )
+
+                if trip_ticks <= 0:
+                    continue
+
+                vpt = trip_value / trip_ticks
+
+                if vpt > best_vpt:
+                    best_vpt = vpt
+                    best_gather = g
+
             selected = candidate
-            gather_count = possible_gathers
+            gather_count = best_gather
             break
 
         if selected is None:
