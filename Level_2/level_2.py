@@ -130,9 +130,10 @@ def find_nearest_node_for_resource(graph, current_loc, nodes, resource):
 
 
 def solve(data):
-    total_ticks = data["total_ticks"]
-    start_town = data["starting_town"]
-    enteloot = data["starting_enteloot"]
+    run_config = data["run"]
+    total_ticks = run_config["total_ticks"]
+    start_town = run_config["starting_town"]
+    enteloot = run_config["starting_enteloot"]
     towns = data["towns"]
     nodes = data["nodes"]
 
