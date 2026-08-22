@@ -2,8 +2,7 @@ import json
 import heapq
 import math
 import time
-from collections import defaultdict
-
+from collections import defaultdict, Counter
 
 # ============================================================
 # Constants from the Level 1 specification
@@ -19,178 +18,82 @@ RESOURCE_SELL_PRICES = {
     "ore": 6,
 }
 
-# Ore does not appear in Level 1 according to the specification,
-# but keeping it here makes the validation more robust.
-LEVEL_1_RESOURCES = {
-    "wheat",
-    "wood",
-    "stone",
-    "clay",
-    "fish",
-    "sheep",
+RESOURCE_BUY_PRICES = {
+    "wheat": 4,
+    "wood": 5,
+    "stone": 5,
+    "clay": 6,
+    "fish": 6,
+    "sheep": 8,
 }
 
 
 # ============================================================
-# Input
+# Input Loading & Validation
 # ============================================================
 
 def load_input(filename="1.txt"):
-    """Load and validate the challenge input JSON."""
+    candidates = [filename, "level1.json", "level_1.json", "1.json", "input.json"]
+    input_file = None
+    for cand in candidates:
+        try:
+            with open(cand, "r", encoding="utf-8") as file:
+                data = json.load(file)
+                input_file = cand
+                break
+        except (FileNotFoundError, json.JSONDecodeError):
+            continue
 
-    try:
-        with open(filename, "r", encoding="utf-8") as file:
-            data = json.load(file)
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Input file '{filename}' was not found."
-        )
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"Input file '{filename}' is not valid JSON: {exc}"
-        )
+    if input_file is None:
+        raise FileNotFoundError("Could not find a valid Level 1 input file (e.g. '1.txt').")
 
     validate_input_structure(data)
-
     return data
 
 
 def validate_input_structure(data):
-    """Validate the basic structure of the level JSON."""
-
     if not isinstance(data, dict):
         raise ValueError("Input must be a JSON object.")
 
     required_top_level = {"run", "towns", "nodes", "routes"}
-
     missing = required_top_level - set(data.keys())
-
     if missing:
-        raise ValueError(
-            f"Input is missing required fields: {sorted(missing)}"
-        )
+        raise ValueError(f"Input is missing required fields: {sorted(missing)}")
 
     run = data["run"]
-
     if not isinstance(run, dict):
         raise ValueError("'run' must be an object.")
 
     for field in ("total_ticks", "starting_town", "starting_enteloot"):
         if field not in run:
-            raise ValueError(
-                f"'run' is missing required field '{field}'."
-            )
+            raise ValueError(f"'run' is missing required field '{field}'.")
 
-    if not isinstance(run["total_ticks"], int):
-        raise ValueError("'total_ticks' must be an integer.")
+    if not isinstance(run["total_ticks"], int) or run["total_ticks"] < 0:
+        raise ValueError("'total_ticks' must be a non-negative integer.")
 
-    if run["total_ticks"] < 0:
-        raise ValueError("'total_ticks' cannot be negative.")
-
-    if not isinstance(run["starting_town"], str):
-        raise ValueError("'starting_town' must be a string.")
-
-    if run["starting_town"] not in data["towns"]:
-        raise ValueError(
-            f"Starting town '{run['starting_town']}' does not exist."
-        )
+    if not isinstance(run["starting_town"], str) or run["starting_town"] not in data["towns"]:
+        raise ValueError(f"Starting town '{run.get('starting_town')}' does not exist.")
 
     if not isinstance(run["starting_enteloot"], (int, float)):
         raise ValueError("'starting_enteloot' must be numeric.")
 
-    if not isinstance(data["towns"], dict):
-        raise ValueError("'towns' must be an object.")
-
-    if not isinstance(data["nodes"], dict):
-        raise ValueError("'nodes' must be an object.")
-
-    if not isinstance(data["routes"], list):
-        raise ValueError("'routes' must be an array.")
-
-    for node_name, node in data["nodes"].items():
-
-        if not isinstance(node, dict):
-            raise ValueError(
-                f"Node '{node_name}' must be an object."
-            )
-
-        for field in ("resource", "yield", "gather-time"):
-            if field not in node:
-                raise ValueError(
-                    f"Node '{node_name}' is missing '{field}'."
-                )
-
-        if node["yield"] <= 0:
-            raise ValueError(
-                f"Node '{node_name}' must have a positive yield."
-            )
-
-        if node["gather-time"] <= 0:
-            raise ValueError(
-                f"Node '{node_name}' must have a positive gather time."
-            )
-
-    for route in data["routes"]:
-
-        if not isinstance(route, dict):
-            raise ValueError("Every route must be an object.")
-
-        for field in ("between", "weight", "toll"):
-            if field not in route:
-                raise ValueError(
-                    f"Route is missing '{field}'."
-                )
-
-        if (
-            not isinstance(route["between"], list)
-            or len(route["between"]) != 2
-        ):
-            raise ValueError(
-                "'between' must contain exactly two vertices."
-            )
-
-        if route["weight"] < 0:
-            raise ValueError("Route weight cannot be negative.")
-
-        if route["toll"] < 0:
-            raise ValueError("Route toll cannot be negative.")
-
 
 # ============================================================
-# Graph
+# Graph & Dijkstra Pathfinding
 # ============================================================
 
 def build_graph(data):
-    """
-    Build an undirected weighted graph.
-
-    Level 1 uses normal routes. Fast routes are a Level 3 mechanic,
-    so they are deliberately ignored here.
-    """
-
     graph = defaultdict(list)
-
     vertices = set(data["towns"]) | set(data["nodes"])
 
     for route in data["routes"]:
-
         a, b = route["between"]
         weight = route["weight"]
-        toll = route["toll"]
+        toll = route.get("toll", 0)
 
-        if a not in vertices:
-            raise ValueError(
-                f"Route references unknown vertex '{a}'."
-            )
+        if a not in vertices or b not in vertices:
+            raise ValueError(f"Route references unknown vertices: {a}, {b}")
 
-        if b not in vertices:
-            raise ValueError(
-                f"Route references unknown vertex '{b}'."
-            )
-
-        # Level 1 does not use fast routes.
-        # A route with a toll represents a fast route in the
-        # specification's example and is therefore ignored.
         if toll != 0:
             continue
 
@@ -200,57 +103,31 @@ def build_graph(data):
     return graph
 
 
-# ============================================================
-# Dijkstra
-# ============================================================
-
 def dijkstra(graph, start):
-    """
-    Calculate shortest distances and predecessor information
-    from start to every reachable vertex.
-    """
-
-    distances = {
-        vertex: math.inf
-        for vertex in graph
-    }
-
-    previous = {
-        vertex: None
-        for vertex in graph
-    }
-
+    distances = {vertex: math.inf for vertex in graph}
+    previous = {vertex: None for vertex in graph}
     distances[start] = 0
 
     priority_queue = [(0, start)]
 
     while priority_queue:
-
         current_distance, current = heapq.heappop(priority_queue)
 
         if current_distance != distances[current]:
             continue
 
         for neighbour, weight in graph[current]:
-
             new_distance = current_distance + weight
 
             if new_distance < distances[neighbour]:
-
                 distances[neighbour] = new_distance
                 previous[neighbour] = current
-
-                heapq.heappush(
-                    priority_queue,
-                    (new_distance, neighbour)
-                )
+                heapq.heappush(priority_queue, (new_distance, neighbour))
 
     return distances, previous
 
 
 def reconstruct_path(previous, start, destination):
-    """Reconstruct a shortest path from Dijkstra's results."""
-
     if start == destination:
         return [start]
 
@@ -259,61 +136,37 @@ def reconstruct_path(previous, start, destination):
 
     while current is not None:
         path.append(current)
-
         if current == start:
             break
-
         current = previous[current]
 
     if not path or path[-1] != start:
         return None
 
     path.reverse()
-
     return path
 
 
-# ============================================================
-# Route calculation
-# ============================================================
-
 def calculate_all_routes(data, graph):
-    """
-    Calculate shortest paths between all relevant vertices.
-
-    Dijkstra is run once from every vertex rather than repeatedly
-    for every individual action.
-    """
-
     routes = {}
-
     vertices = list(graph.keys())
 
     for start in vertices:
-
         distances, previous = dijkstra(graph, start)
-
         routes[start] = {}
 
         for destination in vertices:
-
             if destination == start:
                 routes[start][destination] = {
                     "distance": 0,
                     "path": [start],
                 }
-
                 continue
 
             if distances[destination] == math.inf:
                 continue
 
-            path = reconstruct_path(
-                previous,
-                start,
-                destination
-            )
-
+            path = reconstruct_path(previous, start, destination)
             if path is not None:
                 routes[start][destination] = {
                     "distance": distances[destination],
@@ -324,144 +177,12 @@ def calculate_all_routes(data, graph):
 
 
 # ============================================================
-# Town helpers
-# ============================================================
-
-def get_towns_producing_resource(data, resource):
-    """Return towns that produce the specified resource."""
-
-    result = []
-
-    for town_name, town in data["towns"].items():
-
-        production = town.get("production", {})
-        resources = production.get("resources", {})
-
-        if resource in resources:
-            result.append(town_name)
-
-    return result
-
-
-def get_best_selling_town(data, resource):
-    """
-    Level 1 raw resource selling uses a global sell price.
-
-    Therefore every town pays the same raw-resource price.
-
-    The specification mentions selling resources at towns that
-    produce them least, but the raw-resource price itself is global.
-    We therefore select the nearest producing town when one exists.
-    """
-
-    producing_towns = get_towns_producing_resource(
-        data,
-        resource
-    )
-
-    if producing_towns:
-        return producing_towns
-
-    return list(data["towns"].keys())
-
-
-# ============================================================
-# Node evaluation
-# ============================================================
-
-def evaluate_node(data, node_name, current_location, routes):
-    """
-    Calculate a simple economic value for gathering from a node.
-
-    Value per gathering action:
-        yield × raw resource sell price
-
-    Cost:
-        travel to node
-        + gather
-        + return to a town
-
-    The score is therefore approximated by value per tick.
-
-    This is intentionally a heuristic because the complete scoring
-    equation is not supplied in the specification.
-    """
-
-    node = data["nodes"][node_name]
-
-    resource = node["resource"]
-    yield_amount = node["yield"]
-    gather_time = node["gather-time"]
-
-    if resource not in RESOURCE_SELL_PRICES:
-        return None
-
-    if current_location not in routes:
-        return None
-
-    if node_name not in routes[current_location]:
-        return None
-
-    travel_to = routes[current_location][node_name]["distance"]
-
-    # Find the cheapest reachable town to return to.
-    best_return = None
-
-    for town_name in data["towns"]:
-
-        if node_name not in routes:
-            continue
-
-        if town_name not in routes[node_name]:
-            continue
-
-        return_distance = routes[node_name][town_name]["distance"]
-
-        if best_return is None or return_distance < best_return[1]:
-            best_return = (town_name, return_distance)
-
-    if best_return is None:
-        return None
-
-    return_town, travel_back = best_return
-
-    value = yield_amount * RESOURCE_SELL_PRICES[resource]
-
-    total_ticks = (
-        travel_to
-        + gather_time
-        + travel_back
-        + 1  # sell action
-    )
-
-    if total_ticks <= 0:
-        return None
-
-    value_per_tick = value / total_ticks
-
-    return {
-        "node": node_name,
-        "resource": resource,
-        "yield": yield_amount,
-        "gather_time": gather_time,
-        "travel_to": travel_to,
-        "return_town": return_town,
-        "travel_back": travel_back,
-        "value": value,
-        "value_per_tick": value_per_tick,
-    }
-
-
-# ============================================================
-# Action helpers
+# Action Helpers
 # ============================================================
 
 def add_travel_actions(actions, path):
-    """Add travel actions for each edge in a path."""
-
     if not path:
         return
-
     for destination in path[1:]:
         actions.append({
             "type": "travel",
@@ -470,724 +191,428 @@ def add_travel_actions(actions, path):
 
 
 def add_gather_actions(actions, count):
-    """Add repeated gather actions."""
-
     for _ in range(count):
-        actions.append({
-            "type": "gather"
-        })
+        actions.append({"type": "gather"})
 
 
 def add_sell_action(actions, resource, quantity):
-    """Add a sell action."""
-
     if quantity <= 0:
         return
-
     actions.append({
         "type": "sell",
         "item": resource,
-        "quantity": quantity,
+        "quantity": int(quantity),
+    })
+
+
+def add_buy_action(actions, resource, quantity):
+    if quantity <= 0:
+        return
+    actions.append({
+        "type": "buy",
+        "item": resource,
+        "quantity": int(quantity),
     })
 
 
 # ============================================================
-# Action cost
+# Passive Inventory Tracking
 # ============================================================
 
-def calculate_action_cost(action, data, graph):
-    """
-    Calculate the known tick cost of an action.
+def get_inventory_at_tick(data, t, gathered_resources, sold_resources):
+    inventory = Counter()
+    for town_name, town in data["towns"].items():
+        production = town.get("production", {})
+        rate = production.get("rate")
+        resources = production.get("resources", {})
+        if rate and rate > 0:
+            cycles = t // rate
+            for res, amount in resources.items():
+                inventory[res] += cycles * amount
 
-    This is used for our own validation/planning.
+    for res, amount in gathered_resources.items():
+        inventory[res] += amount
 
-    Level 1 actions:
-        travel = edge weight
-        gather = node gather time
-        buy = 1
-        sell = 1
+    for res, amount in sold_resources.items():
+        inventory[res] -= amount
 
-    Craft/build/upkeep are not used in Level 1.
-    """
-
-    action_type = action.get("type")
-
-    if action_type == "travel":
-
-        destination = action.get("destination")
-
-        if destination not in graph:
-            raise ValueError(
-                f"Unknown travel destination '{destination}'."
-            )
-
-        return None
-
-    if action_type in {"buy", "sell"}:
-        return 1
-
-    if action_type == "gather":
-        return None
-
-    return None
+    return inventory
 
 
 # ============================================================
-# Solution validation
+# Solution Validation
 # ============================================================
 
 def validate_solution(data, actions):
-    """
-    Validate the action sequence against the Level 1 rules.
-
-    This is a local validation of the generated solution.
-    The official engine remains the authoritative validator.
-    """
-
     if not isinstance(actions, list):
         raise ValueError("Actions must be a list.")
 
     total_ticks = data["run"]["total_ticks"]
-
     graph = build_graph(data)
-
     current_location = data["run"]["starting_town"]
-
-    inventory = defaultdict(int)
-
+    
+    gathered_resources = Counter()
+    sold_resources = Counter()
+    enteloot = data["run"]["starting_enteloot"]
     elapsed_ticks = 0
+    total_items_sold = 0
 
     for index, action in enumerate(actions):
-
         if not isinstance(action, dict):
-            raise ValueError(
-                f"Action {index} is not an object."
-            )
+            raise ValueError(f"Action {index} is not an object.")
 
         action_type = action.get("type")
 
         if action_type == "travel":
-
             destination = action.get("destination")
-
             if destination not in graph:
-                raise ValueError(
-                    f"Action {index}: unknown destination "
-                    f"'{destination}'."
-                )
+                raise ValueError(f"Action {index}: unknown destination '{destination}'.")
 
-            neighbours = {
-                neighbour: weight
-                for neighbour, weight in graph[current_location]
-            }
-
+            neighbours = {neighbour: weight for neighbour, weight in graph[current_location]}
             if destination not in neighbours:
-                raise ValueError(
-                    f"Action {index}: cannot travel from "
-                    f"'{current_location}' to '{destination}'."
-                )
+                raise ValueError(f"Action {index}: cannot travel from '{current_location}' to '{destination}'.")
 
             cost = neighbours[destination]
-
             elapsed_ticks += cost
             current_location = destination
 
         elif action_type == "gather":
-
             if current_location not in data["nodes"]:
-                raise ValueError(
-                    f"Action {index}: gather attempted at "
-                    f"non-resource node '{current_location}'."
-                )
+                raise ValueError(f"Action {index}: gather attempted at non-resource node '{current_location}'.")
 
             node = data["nodes"][current_location]
-
             resource = node["resource"]
             quantity = node["yield"]
             cost = node["gather-time"]
 
-            inventory[resource] += quantity
+            gathered_resources[resource] += quantity
             elapsed_ticks += cost
 
         elif action_type == "sell":
-
             item = action.get("item")
             quantity = action.get("quantity")
 
             if item not in RESOURCE_SELL_PRICES:
-                raise ValueError(
-                    f"Action {index}: unknown resource '{item}'."
-                )
+                raise ValueError(f"Action {index}: unknown resource '{item}'.")
 
             if not isinstance(quantity, int) or quantity <= 0:
+                raise ValueError(f"Action {index}: sell quantity must be positive.")
+
+            current_inv = get_inventory_at_tick(data, elapsed_ticks, gathered_resources, sold_resources)
+            if current_inv[item] < quantity:
                 raise ValueError(
-                    f"Action {index}: sell quantity must "
-                    f"be a positive integer."
+                    f"Action {index}: attempting to sell {quantity} {item}, "
+                    f"but only {current_inv[item]} available."
                 )
 
-            if inventory[item] < quantity:
-                raise ValueError(
-                    f"Action {index}: attempting to sell "
-                    f"{quantity} {item}, but only "
-                    f"{inventory[item]} available."
-                )
-
-            inventory[item] -= quantity
+            sold_resources[item] += quantity
+            enteloot += quantity * RESOURCE_SELL_PRICES[item]
+            total_items_sold += quantity
             elapsed_ticks += 1
 
         elif action_type == "buy":
-
             item = action.get("item")
             quantity = action.get("quantity")
 
             if item not in RESOURCE_SELL_PRICES:
-                raise ValueError(
-                    f"Action {index}: unknown resource '{item}'."
-                )
+                raise ValueError(f"Action {index}: unknown resource '{item}'.")
 
             if not isinstance(quantity, int) or quantity <= 0:
-                raise ValueError(
-                    f"Action {index}: buy quantity must "
-                    f"be a positive integer."
-                )
+                raise ValueError(f"Action {index}: buy quantity must be positive.")
 
-            # Level 1 buys are valid only at towns that produce
-            # the resource.
             if current_location not in data["towns"]:
-                raise ValueError(
-                    f"Action {index}: cannot buy at a resource node."
-                )
+                raise ValueError(f"Action {index}: cannot buy at a resource node.")
 
-            town_resources = (
-                data["towns"][current_location]
-                .get("production", {})
-                .get("resources", {})
-            )
-
+            town_resources = data["towns"][current_location].get("production", {}).get("resources", {})
             if item not in town_resources:
-                raise ValueError(
-                    f"Action {index}: town "
-                    f"'{current_location}' does not produce "
-                    f"'{item}'."
-                )
+                raise ValueError(f"Action {index}: town '{current_location}' does not produce '{item}'.")
 
-            # Buying is not used by our strategy, but we account
-            # for the inventory change.
-            inventory[item] += quantity
+            buy_price = RESOURCE_BUY_PRICES.get(item, 0)
+            cost_enteloot = buy_price * quantity
+            if enteloot < cost_enteloot:
+                raise ValueError(f"Action {index}: cannot afford to buy {quantity} {item}.")
+
+            enteloot -= cost_enteloot
+            gathered_resources[item] += quantity
             elapsed_ticks += 1
 
         else:
-            raise ValueError(
-                f"Action {index}: unsupported Level 1 "
-                f"action '{action_type}'."
-            )
+            raise ValueError(f"Action {index}: unsupported Level 1 action '{action_type}'.")
 
         if elapsed_ticks > total_ticks:
-            raise ValueError(
-                f"Solution exceeds total tick limit at action "
-                f"{index}: {elapsed_ticks} > {total_ticks}."
-            )
+            raise ValueError(f"Solution exceeds tick limit at action {index}: {elapsed_ticks} > {total_ticks}.")
+
+    final_inventory = get_inventory_at_tick(data, elapsed_ticks, gathered_resources, sold_resources)
 
     return {
         "valid": True,
         "ticks": elapsed_ticks,
         "remaining_ticks": total_ticks - elapsed_ticks,
-        "inventory": dict(inventory),
+        "inventory": dict(final_inventory),
         "final_location": current_location,
+        "enteloot": enteloot,
+        "total_items_sold": total_items_sold,
     }
 
 
 # ============================================================
-# Baseline
+# Final Volume Multiplier Boost
 # ============================================================
 
-def generate_baseline(data, routes):
+def apply_final_volume_boost(data, current_location, elapsed_ticks, total_ticks, current_enteloot, current_sold, gathered_resources, sold_resources, actions):
     """
-    Baseline strategy:
-
-    Travel to the first reachable resource node,
-    gather once, return to a town and sell.
-
-    This gives us a simple guaranteed strategy against which
-    the improved heuristic can be compared.
+    Use leftover ticks to execute an optimal volume trade:
+    Buy Q* and Sell Q* to maximize (Enteloot) * (Items Sold Multiplier).
     """
+    if current_location not in data["towns"]:
+        return elapsed_ticks, current_enteloot
 
-    start = data["run"]["starting_town"]
+    if elapsed_ticks + 2 > total_ticks:
+        return elapsed_ticks, current_enteloot
 
-    for node_name in data["nodes"]:
+    town_resources = data["towns"][current_location].get("production", {}).get("resources", {})
+    if not town_resources:
+        return elapsed_ticks, current_enteloot
 
-        if start not in routes:
-            continue
+    # Find resource with minimum loss (buy_price - sell_price)
+    best_res = None
+    best_loss = math.inf
+    for res in town_resources:
+        buy_p = RESOURCE_BUY_PRICES.get(res)
+        sell_p = RESOURCE_SELL_PRICES.get(res)
+        if buy_p and sell_p:
+            loss = buy_p - sell_p
+            if loss < best_loss:
+                best_loss = loss
+                best_res = res
 
-        if node_name not in routes[start]:
-            continue
+    if best_res is None or best_loss <= 0:
+        return elapsed_ticks, current_enteloot
 
-        resource = data["nodes"][node_name]["resource"]
-        quantity = data["nodes"][node_name]["yield"]
+    # Q* = (Enteloot - loss * current_sold) / (2 * loss)
+    optimal_Q = (current_enteloot - best_loss * current_sold) / (2.0 * best_loss)
+    buy_p = RESOURCE_BUY_PRICES[best_res]
+    sell_p = RESOURCE_SELL_PRICES[best_res]
+    
+    max_affordable_Q = current_enteloot // buy_p
+    Q = int(math.floor(min(optimal_Q, max_affordable_Q)))
 
-        return_towns = get_best_selling_town(
-            data,
-            resource
-        )
+    if Q <= 0:
+        return elapsed_ticks, current_enteloot
 
-        for town in return_towns:
+    # 1. Buy action (1 tick)
+    add_buy_action(actions, best_res, Q)
+    gathered_resources[best_res] += Q
+    current_enteloot -= Q * buy_p
+    elapsed_ticks += 1
 
-            if town not in routes[node_name]:
-                continue
+    # 2. Sell action (1 tick)
+    add_sell_action(actions, best_res, Q)
+    sold_resources[best_res] += Q
+    current_enteloot += Q * sell_p
+    elapsed_ticks += 1
 
-            actions = []
-
-            add_travel_actions(
-                actions,
-                routes[start][node_name]["path"]
-            )
-
-            add_gather_actions(actions, 1)
-
-            add_travel_actions(
-                actions,
-                routes[node_name][town]["path"]
-            )
-
-            add_sell_action(
-                actions,
-                resource,
-                quantity
-            )
-
-            try:
-                validate_solution(data, actions)
-                return actions
-            except ValueError:
-                continue
-
-    # A zero-action solution is always structurally valid.
-    return []
+    return elapsed_ticks, current_enteloot
 
 
 # ============================================================
-# Optimised Level 1 strategy
+# Optimized Solver
 # ============================================================
 
 def solve(data):
-    """
-    Generate a deterministic Level 1 solution.
-
-    Strategy:
-
-    - Use Dijkstra for travel.
-    - Evaluate every resource node.
-    - Select the best value-per-tick gathering opportunity.
-    - Gather as many times as possible while retaining enough
-      time to return and sell.
-    - Sell before continuing.
-    - Repeat.
-
-    This is a heuristic because the specification does not provide
-    the complete numerical scoring formula.
-    """
-
     graph = build_graph(data)
-
-    routes = calculate_all_routes(
-        data,
-        graph
-    )
-
-    baseline = generate_baseline(
-        data,
-        routes
-    )
-
-    baseline_result = validate_solution(
-        data,
-        baseline
-    )
-
-    best_actions = baseline
-    best_proxy_score = calculate_proxy_score(
-        data,
-        baseline_result
-    )
+    routes = calculate_all_routes(data, graph)
 
     total_ticks = data["run"]["total_ticks"]
-
     current_location = data["run"]["starting_town"]
 
-    inventory = defaultdict(int)
+    gathered_resources = Counter()
+    sold_resources = Counter()
+    current_enteloot = data["run"]["starting_enteloot"]
 
     actions = []
     elapsed_ticks = 0
 
+    passive_res_types = sorted(list(set(
+        res for t_info in data["towns"].values()
+        for res in t_info.get("production", {}).get("resources", {})
+    )))
+    K_passive = len(passive_res_types)
+    # Reserve K_passive ticks for liquidation + 2 ticks for the volume boost
+    K_buffer = K_passive + 2
+
+    # Calculate passive background potential
+    total_passive_inv = get_inventory_at_tick(data, total_ticks, Counter(), Counter())
+    total_passive_enteloot = sum(qty * RESOURCE_SELL_PRICES.get(res, 0) for res, qty in total_passive_inv.items())
+    total_passive_items = sum(total_passive_inv.values())
+
     while elapsed_ticks < total_ticks:
+        remaining_ticks = total_ticks - elapsed_ticks
+        available_budget = remaining_ticks - K_buffer
 
-        candidates = []
+        best_trip = None
+        best_trip_score = -1
 
-        for node_name in data["nodes"]:
-
-            evaluation = evaluate_node(
-                data,
-                node_name,
-                current_location,
-                routes
-            )
-
-            if evaluation is None:
+        for node_name, node in data["nodes"].items():
+            resource = node["resource"]
+            yield_amount = node["yield"]
+            gather_time = node["gather-time"]
+            price = RESOURCE_SELL_PRICES.get(resource, 0)
+            if price == 0:
                 continue
 
-            candidates.append(evaluation)
-
-        if not candidates:
-            break
-
-        # Deterministic tie-breaking:
-        # 1. Highest value/tick
-        # 2. Highest raw value
-        # 3. Shortest travel
-        # 4. Node name
-        candidates.sort(
-            key=lambda item: (
-                -item["value_per_tick"],
-                -item["value"],
-                item["travel_to"],
-                item["node"],
-            )
-        )
-
-        selected = None
-        gather_count = 0
-
-        for candidate in candidates:
-
-            node_name = candidate["node"]
-            resource = candidate["resource"]
-
-            if (
-                current_location not in routes
-                or node_name not in routes[current_location]
-            ):
+            if current_location not in routes or node_name not in routes[current_location]:
                 continue
-
-            return_town = candidate["return_town"]
-
-            travel_to_path = routes[current_location][node_name]["path"]
-            return_path = routes[node_name][return_town]["path"]
 
             travel_to_ticks = routes[current_location][node_name]["distance"]
-            return_ticks = routes[node_name][return_town]["distance"]
+            travel_to_path = routes[current_location][node_name]["path"]
 
-            gather_time = candidate["gather_time"]
-            yield_amount = candidate["yield"]
+            best_return_town = None
+            best_return_ticks = math.inf
+            for town_name in data["towns"]:
+                if node_name in routes and town_name in routes[node_name]:
+                    d = routes[node_name][town_name]["distance"]
+                    if d < best_return_ticks:
+                        best_return_ticks = d
+                        best_return_town = town_name
 
-            # At least one gathering action must fit together
-            # with travel to the node, return, and selling.
-            minimum_ticks = (
-                travel_to_ticks
-                + gather_time
-                + return_ticks
-                + 1
-            )
-
-            if elapsed_ticks + minimum_ticks > total_ticks:
+            if best_return_town is None:
                 continue
 
-            remaining_ticks = total_ticks - elapsed_ticks
+            return_path = routes[node_name][best_return_town]["path"]
 
-            # Number of gathers that can fit before the final sell.
-            available_for_gathering = (
-                remaining_ticks
-                - travel_to_ticks
-                - return_ticks
-                - 1
-            )
-
-            possible_gathers = (
-                available_for_gathering // gather_time
-            )
-
-            if possible_gathers <= 0:
-                continue
-
-            # Choose the number of gathers that maximises
-            # trip value per tick rather than always using
-            # the maximum possible gathers. This balances
-            # long trips against diminishing returns.
-            best_gather = 1
-            best_vpt = 0.0
-            price = RESOURCE_SELL_PRICES.get(resource, 0)
-
-            for g in range(1, possible_gathers + 1):
-                trip_value = g * yield_amount * price
-                trip_ticks = (
-                    travel_to_ticks
-                    + (g * gather_time)
-                    + return_ticks
-                    + 1
-                )
-
-                if trip_ticks <= 0:
+            min_trip_ticks = travel_to_ticks + gather_time + best_return_ticks + 1
+            if min_trip_ticks > available_budget:
+                if min_trip_ticks > remaining_ticks:
                     continue
+                ticks_for_gathering = remaining_ticks - travel_to_ticks - best_return_ticks - 1
+            else:
+                ticks_for_gathering = available_budget - travel_to_ticks - best_return_ticks - 1
 
-                vpt = trip_value / trip_ticks
+            num_gathers = ticks_for_gathering // gather_time
+            if num_gathers <= 0:
+                continue
 
-                if vpt > best_vpt:
-                    best_vpt = vpt
-                    best_gather = g
+            total_gathered = num_gathers * yield_amount
+            trip_profit = total_gathered * price
+            
+            # Evaluate candidates on combined projected score: Enteloot * Items Sold
+            proj_enteloot = current_enteloot + trip_profit + total_passive_enteloot
+            proj_items = sum(sold_resources.values()) + total_gathered + total_passive_items
+            score_metric = proj_enteloot * proj_items
 
-            selected = candidate
-            gather_count = best_gather
+            if score_metric > best_trip_score:
+                best_trip_score = score_metric
+                best_trip = {
+                    "node_name": node_name,
+                    "resource": resource,
+                    "yield_amount": yield_amount,
+                    "gather_time": gather_time,
+                    "num_gathers": num_gathers,
+                    "travel_to_path": travel_to_path,
+                    "travel_to_ticks": travel_to_ticks,
+                    "return_town": best_return_town,
+                    "return_path": return_path,
+                    "return_ticks": best_return_ticks,
+                    "trip_profit": trip_profit,
+                }
+
+        if best_trip is None:
             break
 
-        if selected is None:
-            break
+        # 1. Travel
+        add_travel_actions(actions, best_trip["travel_to_path"])
+        elapsed_ticks += best_trip["travel_to_ticks"]
 
-        node_name = selected["node"]
-        resource = selected["resource"]
-        return_town = selected["return_town"]
+        # 2. Continuous Gathering
+        add_gather_actions(actions, best_trip["num_gathers"])
+        elapsed_ticks += best_trip["num_gathers"] * best_trip["gather_time"]
+        gathered_qty = best_trip["num_gathers"] * best_trip["yield_amount"]
+        gathered_resources[best_trip["resource"]] += gathered_qty
 
-        travel_to_path = routes[current_location][node_name]["path"]
-        return_path = routes[node_name][return_town]["path"]
+        # 3. Return to Town
+        add_travel_actions(actions, best_trip["return_path"])
+        elapsed_ticks += best_trip["return_ticks"]
+        current_location = best_trip["return_town"]
 
-        # Travel to node.
-        add_travel_actions(
-            actions,
-            travel_to_path
-        )
-
-        elapsed_ticks += selected["travel_to"]
-
-        # Gather.
-        add_gather_actions(
-            actions,
-            gather_count
-        )
-
-        elapsed_ticks += (
-            gather_count * selected["gather_time"]
-        )
-
-        gathered_quantity = (
-            gather_count * selected["yield"]
-        )
-
-        inventory[resource] += gathered_quantity
-
-        # Return to town.
-        add_travel_actions(
-            actions,
-            return_path
-        )
-
-        elapsed_ticks += selected["travel_back"]
-
-        # Sell everything of this resource gathered in this trip.
-        add_sell_action(
-            actions,
-            resource,
-            gathered_quantity
-        )
-
+        # 4. Sell Gathered Batch
+        add_sell_action(actions, best_trip["resource"], gathered_qty)
+        sold_resources[best_trip["resource"]] += gathered_qty
+        current_enteloot += best_trip["trip_profit"]
         elapsed_ticks += 1
 
-        inventory[resource] -= gathered_quantity
+    # End-of-Run Bulk Liquidation Pass
+    if current_location in data["towns"]:
+        inv = get_inventory_at_tick(data, elapsed_ticks, gathered_resources, sold_resources)
+        for res in sorted(inv.keys(), key=lambda r: -RESOURCE_SELL_PRICES.get(r, 0)):
+            if elapsed_ticks >= total_ticks - 2: # Keep 2 ticks for the volume boost
+                break
+            qty = inv[res]
+            if qty > 0:
+                add_sell_action(actions, res, qty)
+                sold_resources[res] += qty
+                current_enteloot += qty * RESOURCE_SELL_PRICES.get(res, 0)
+                elapsed_ticks += 1
 
-        current_location = return_town
+    # End-of-Run Volume Multiplier Boost (uses the last 2 ticks)
+    current_sold_count = sum(sold_resources.values())
+    elapsed_ticks, current_enteloot = apply_final_volume_boost(
+        data, current_location, elapsed_ticks, total_ticks, current_enteloot, current_sold_count, gathered_resources, sold_resources, actions
+    )
 
-        # ----------------------------------------------------
-        # Compare the current strategy against the best one.
-        # ----------------------------------------------------
+    # Any remaining 1-tick cleanup
+    if current_location in data["towns"] and elapsed_ticks < total_ticks:
+        inv = get_inventory_at_tick(data, elapsed_ticks, gathered_resources, sold_resources)
+        for res in sorted(inv.keys(), key=lambda r: -RESOURCE_SELL_PRICES.get(r, 0)):
+            if elapsed_ticks >= total_ticks:
+                break
+            qty = inv[res]
+            if qty > 0:
+                add_sell_action(actions, res, qty)
+                sold_resources[res] += qty
+                elapsed_ticks += 1
 
-        try:
-            result = validate_solution(
-                data,
-                actions
-            )
-        except ValueError:
-            # Should never happen because actions are generated
-            # through validated routes.
-            break
-
-        proxy_score = calculate_proxy_score(
-            data,
-            result
-        )
-
-        if proxy_score > best_proxy_score:
-
-            best_proxy_score = proxy_score
-            best_actions = list(actions)
-
-    return best_actions, baseline, routes
-
-
-# ============================================================
-# Proxy objective
-# ============================================================
-
-def calculate_proxy_score(data, validation_result):
-    """
-    Calculate a transparent proxy objective.
-
-    IMPORTANT:
-    This is NOT claimed to be the official competition score.
-
-    The supplied specification states that Level 1 scoring involves:
-        - Enteloot generation
-        - final item value
-        - a multiplier based on items sold
-
-    However, the exact formula is not supplied.
-
-    Therefore we use the value of remaining inventory as a
-    conservative local proxy.
-
-    The official simulator should be used to obtain the actual score.
-    """
-
-    inventory = validation_result["inventory"]
-
-    inventory_value = 0
-
-    for resource, quantity in inventory.items():
-
-        price = RESOURCE_SELL_PRICES.get(resource, 0)
-
-        inventory_value += quantity * price
-
-    return inventory_value
+    return actions, routes
 
 
 # ============================================================
-# Submission
+# Main Execution & Submission Output
 # ============================================================
 
 def create_submission(actions, filename="level1_submission.txt"):
-    """Write the exact required submission structure."""
-
-    submission = {
-        "actions": actions
-    }
-
-    with open(
-        filename,
-        "w",
-        encoding="utf-8"
-    ) as file:
-
-        json.dump(
-            submission,
-            file,
-            indent=2
-        )
-
+    submission = {"actions": actions}
+    with open(filename, "w", encoding="utf-8") as file:
+        json.dump(submission, file, indent=2)
     return filename
 
 
-# ============================================================
-# Main
-# ============================================================
-
 def main():
-
     start_time = time.perf_counter()
-
     print("Loading Level 1 input...")
-
     data = load_input("1.txt")
 
-    print("Input loaded.")
-    print(
-        f"Starting town: {data['run']['starting_town']}"
-    )
-    print(
-        f"Total ticks: {data['run']['total_ticks']}"
-    )
-    print(
-        f"Starting Enteloot: "
-        f"{data['run']['starting_enteloot']}"
-    )
-
-    print("Building map...")
-
-    graph = build_graph(data)
-
-    print(
-        f"Map contains {len(graph)} reachable vertices."
-    )
-
-    print("Generating baseline solution...")
-
-    routes = calculate_all_routes(
-        data,
-        graph
-    )
-
-    baseline = generate_baseline(
-        data,
-        routes
-    )
-
-    baseline_result = validate_solution(
-        data,
-        baseline
-    )
-
-    print(
-        f"Baseline actions: {len(baseline)}"
-    )
-
-    print(
-        f"Baseline ticks: "
-        f"{baseline_result['ticks']}"
-    )
+    print(f"Starting town: {data['run']['starting_town']}")
+    print(f"Total ticks: {data['run']['total_ticks']}")
+    print(f"Starting Enteloot: {data['run']['starting_enteloot']}")
 
     print("Optimising Level 1 strategy...")
+    actions, routes = solve(data)
 
-    best_actions, baseline, routes = solve(data)
+    validation = validate_solution(data, actions)
 
-    print(
-        f"Optimised actions: {len(best_actions)}"
-    )
+    print("-" * 50)
+    print(f"Optimised actions: {len(actions)}")
+    print(f"Ticks used: {validation['ticks']} / {data['run']['total_ticks']}")
+    print(f"Remaining ticks: {validation['remaining_ticks']}")
+    print(f"Final location: {validation['final_location']}")
+    print(f"Final Enteloot: {validation['enteloot']}")
+    print(f"Total Items Sold: {validation['total_items_sold']}")
+    print(f"Unsold Inventory: {validation['inventory']}")
+    print("-" * 50)
 
-    validation = validate_solution(
-        data,
-        best_actions
-    )
-
-    print(
-        f"Optimised ticks: "
-        f"{validation['ticks']}"
-    )
-
-    print(
-        f"Remaining ticks: "
-        f"{validation['remaining_ticks']}"
-    )
-
-    print(
-        f"Final location: "
-        f"{validation['final_location']}"
-    )
-
-    print(
-        f"Final inventory: "
-        f"{validation['inventory']}"
-    )
-
-    output_file = create_submission(
-        best_actions,
-        "level1_submission.txt"
-    )
-
-    print(
-        f"Submission created: {output_file}"
-    )
-
-    runtime = time.perf_counter() - start_time
-
-    print(
-        f"Runtime: {runtime:.4f} seconds"
-    )
+    output_file = create_submission(actions, "level1_submission.txt")
+    print(f"Submission created: {output_file}")
+    print(f"Runtime: {time.perf_counter() - start_time:.4f} seconds")
 
 
 if __name__ == "__main__":
