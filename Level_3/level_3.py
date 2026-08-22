@@ -1,15 +1,17 @@
 import json
-import heapq
 import math
+import heapq
 import os
-from collections import defaultdict, Counter
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 
 
 # ============================================================
-# LEVEL 3 CONSTANTS
+# GLOBAL RULE DATA FROM THE SPECIFICATION
 # ============================================================
 
-RESOURCE_SELL_PRICE = {
+RESOURCE_SELL = {
     "wheat": 2,
     "wood": 3,
     "stone": 3,
@@ -19,13 +21,23 @@ RESOURCE_SELL_PRICE = {
     "ore": 6,
 }
 
-RESOURCE_BUY_PRICE = {
+RESOURCE_BUY = {
     "wheat": 4,
     "wood": 5,
     "stone": 5,
     "clay": 6,
     "fish": 6,
     "sheep": 8,
+    # Ore cannot be bought.
+}
+
+PRODUCTION_UPGRADES = {
+    "Farmhouse": "sheep",
+    "Pier": "fish",
+    "Fertilised-fields": "wheat",
+    "Quarry": "stone",
+    "Woodlands": "wood",
+    "Pottery-house": "clay",
 }
 
 RECIPES = {
@@ -34,18 +46,11 @@ RECIPES = {
         "time": 2,
     },
     "fish-n-chips": {
-        "inputs": {
-            "fish": 2,
-            "wheat": 1,
-        },
+        "inputs": {"fish": 2, "wheat": 1},
         "time": 2,
     },
     "stew": {
-        "inputs": {
-            "sheep": 1,
-            "fish": 1,
-            "wheat": 1,
-        },
+        "inputs": {"sheep": 1, "fish": 1, "wheat": 1},
         "time": 2,
     },
     "wooden-crafts": {
@@ -53,10 +58,7 @@ RECIPES = {
         "time": 2,
     },
     "furniture": {
-        "inputs": {
-            "wood": 3,
-            "sheep": 1,
-        },
+        "inputs": {"wood": 3, "sheep": 1},
         "time": 2,
     },
     "stone-works": {
@@ -64,10 +66,7 @@ RECIPES = {
         "time": 2,
     },
     "roof-tiles": {
-        "inputs": {
-            "clay": 3,
-            "stone": 2,
-        },
+        "inputs": {"clay": 3, "stone": 2},
         "time": 2,
     },
     "wool-garments": {
@@ -75,102 +74,39 @@ RECIPES = {
         "time": 2,
     },
     "pottery": {
-        "inputs": {
-            "clay": 4,
-            "wood": 1,
-        },
+        "inputs": {"clay": 4, "wood": 1},
         "time": 2,
     },
 }
-
 
 COMPONENTS = {
-    "planks": {
-        "inputs": {"wood": 2},
-        "time": 2,
-    },
-    "thatch": {
-        "inputs": {"wheat": 2},
-        "time": 2,
-    },
-    "stone-blocks": {
-        "inputs": {"stone": 3},
-        "time": 2,
-    },
-    "mortar": {
-        "inputs": {
-            "clay": 1,
-            "stone": 1,
-        },
-        "time": 2,
-    },
-    "bricks": {
-        "inputs": {
-            "clay": 2,
-            "mortar": 1,
-        },
-        "time": 2,
-    },
-    "rope": {
-        "inputs": {"sheep": 2},
-        "time": 2,
-    },
-    "fencing": {
-        "inputs": {
-            "wood": 2,
-            "rope": 1,
-        },
-        "time": 2,
-    },
-    "kiln-glass": {
-        "inputs": {
-            "clay": 2,
-            "wood": 2,
-        },
-        "time": 2,
-    },
-    "nets": {
-        "inputs": {
-            "rope": 1,
-            "fencing": 1,
-        },
-        "time": 2,
-    },
-    "iron-fittings": {
-        "inputs": {
-            "ore": 2,
-            "wood": 1,
-        },
-        "time": 2,
-    },
+    "planks": {"inputs": {"wood": 2}, "time": 2},
+    "thatch": {"inputs": {"wheat": 2}, "time": 2},
+    "stone-blocks": {"inputs": {"stone": 3}, "time": 2},
+    "mortar": {"inputs": {"clay": 1, "stone": 1}, "time": 2},
+    "bricks": {"inputs": {"clay": 2, "mortar": 1}, "time": 2},
+    "rope": {"inputs": {"sheep": 2}, "time": 2},
+    "fencing": {"inputs": {"wood": 2, "rope": 1}, "time": 2},
+    "kiln-glass": {"inputs": {"clay": 2, "wood": 2}, "time": 2},
+    "nets": {"inputs": {"rope": 1, "fencing": 1}, "time": 2},
+    "iron-fittings": {"inputs": {"ore": 2, "wood": 1}, "time": 2},
 }
-
 
 TOOLS = {
     "boots": {
-        "inputs": {
-            "iron-fittings": 2,
-            "rope": 2,
-        },
+        "inputs": {"iron-fittings": 2, "rope": 2},
         "effect": "travel",
     },
     "pickaxe": {
-        "inputs": {
-            "iron-fittings": 2,
-            "planks": 2,
-        },
+        "inputs": {"iron-fittings": 2, "planks": 2},
         "effect": "gather",
     },
 }
 
-
 UPGRADES = {
     "Farmhouse": {
         "boost": "sheep",
-        "components": {
-            "planks": 3,
-            "thatch": 2,
-        },
+        "components": {"planks": 3, "thatch": 2},
         "enteloot": 500,
         "time": 3,
         "prerequisite": None,
@@ -178,10 +114,7 @@ UPGRADES = {
     },
     "Pier": {
         "boost": "fish",
-        "components": {
-            "planks": 4,
-            "nets": 2,
-        },
+        "components": {"planks": 4, "nets": 2},
         "enteloot": 600,
         "time": 3,
         "prerequisite": None,
@@ -189,10 +122,7 @@ UPGRADES = {
     },
     "Fertilised-fields": {
         "boost": "wheat",
-        "components": {
-            "fencing": 2,
-            "thatch": 2,
-        },
+        "components": {"fencing": 2, "thatch": 2},
         "enteloot": 500,
         "time": 3,
         "prerequisite": None,
@@ -200,10 +130,7 @@ UPGRADES = {
     },
     "Quarry": {
         "boost": "stone",
-        "components": {
-            "stone-blocks": 3,
-            "planks": 2,
-        },
+        "components": {"stone-blocks": 3, "planks": 2},
         "enteloot": 600,
         "time": 3,
         "prerequisite": None,
@@ -211,10 +138,7 @@ UPGRADES = {
     },
     "Woodlands": {
         "boost": "wood",
-        "components": {
-            "fencing": 2,
-            "rope": 2,
-        },
+        "components": {"fencing": 2, "rope": 2},
         "enteloot": 500,
         "time": 3,
         "prerequisite": None,
@@ -222,10 +146,7 @@ UPGRADES = {
     },
     "Pottery-house": {
         "boost": "clay",
-        "components": {
-            "bricks": 4,
-            "planks": 2,
-        },
+        "components": {"bricks": 4, "planks": 2},
         "enteloot": 700,
         "time": 3,
         "prerequisite": None,
@@ -233,11 +154,7 @@ UPGRADES = {
     },
     "Rec-center": {
         "boost": "enteloot_amount_20",
-        "components": {
-            "planks": 4,
-            "bricks": 3,
-            "rope": 1,
-        },
+        "components": {"planks": 4, "bricks": 3, "rope": 1},
         "enteloot": 1200,
         "time": 4,
         "prerequisite": "production",
@@ -245,11 +162,7 @@ UPGRADES = {
     },
     "Fire-station": {
         "boost": "boost_duration_50",
-        "components": {
-            "bricks": 5,
-            "stone-blocks": 3,
-            "rope": 2,
-        },
+        "components": {"bricks": 5, "stone-blocks": 3, "rope": 2},
         "enteloot": 1800,
         "time": 4,
         "prerequisite": "production2",
@@ -257,11 +170,7 @@ UPGRADES = {
     },
     "School": {
         "boost": "enteloot_amount_50",
-        "components": {
-            "bricks": 6,
-            "planks": 3,
-            "kiln-glass": 2,
-        },
+        "components": {"bricks": 6, "planks": 3, "kiln-glass": 2},
         "enteloot": 2000,
         "time": 5,
         "prerequisite": "Rec-center",
@@ -269,11 +178,7 @@ UPGRADES = {
     },
     "Police-station": {
         "boost": "enteloot_rate_minus_2",
-        "components": {
-            "bricks": 6,
-            "stone-blocks": 4,
-            "iron-fittings": 2,
-        },
+        "components": {"bricks": 6, "stone-blocks": 4, "iron-fittings": 2},
         "enteloot": 2200,
         "time": 5,
         "prerequisite": "Fire-station",
@@ -281,11 +186,7 @@ UPGRADES = {
     },
     "Library": {
         "boost": "enteloot_amount_50",
-        "components": {
-            "bricks": 5,
-            "planks": 5,
-            "kiln-glass": 2,
-        },
+        "components": {"bricks": 5, "planks": 5, "kiln-glass": 2},
         "enteloot": 2500,
         "time": 5,
         "prerequisite": "School",
@@ -295,44 +196,101 @@ UPGRADES = {
 
 
 # ============================================================
-# GENERAL UTILITIES
+# HELPERS
 # ============================================================
 
-def load_input(filename):
-    """Load the level JSON."""
-    with open(filename, "r", encoding="utf-8") as file:
-        return json.load(file)
-
-
-def normalise_name(value):
-    """
-    Convert names to a consistent comparison form.
-
-    This is useful because JSON uses names such as:
-        Fertilised-fields
-        Rec-center
-        iron-fittings
-
-    while Python code may use other casing.
-    """
+def normalise_name(value: str) -> str:
     return str(value).strip().lower().replace("_", "-")
 
 
-def deep_copy_dict(value):
-    """Small dependency-free recursive dictionary copy."""
-    if isinstance(value, dict):
-        return {
-            key: deep_copy_dict(val)
-            for key, val in value.items()
+def load_input(filename: str) -> dict:
+    with open(filename, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def raw_requirements(requirements: Dict[str, int]) -> Counter:
+    """
+    Fully expand construction components to raw resources.
+    """
+    result = Counter()
+
+    def expand(item: str, quantity: int) -> None:
+        if quantity <= 0:
+            return
+
+        if item not in COMPONENTS:
+            result[item] += quantity
+            return
+
+        for ingredient, amount in COMPONENTS[item]["inputs"].items():
+            expand(ingredient, amount * quantity)
+
+    for item, quantity in requirements.items():
+        expand(item, int(quantity))
+
+    return result
+
+
+def raw_requirements_for_components(components: Dict[str, int]) -> Counter:
+    return raw_requirements(components)
+
+
+def production_resource_for_upgrade(upgrade: str) -> Optional[str]:
+    return PRODUCTION_UPGRADES.get(upgrade)
+
+
+# ============================================================
+# ACTION OUTPUT
+# ============================================================
+
+class ActionBuilder:
+    def __init__(self):
+        self.actions: List[dict] = []
+
+    def travel(self, destination: str, fast: bool = False) -> None:
+        action = {
+            "type": "travel",
+            "destination": destination,
         }
+        if fast:
+            action["fast"] = True
+        self.actions.append(action)
 
-    if isinstance(value, list):
-        return [
-            deep_copy_dict(item)
-            for item in value
-        ]
+    def gather(self) -> None:
+        self.actions.append({"type": "gather"})
 
-    return value
+    def buy(self, item: str, quantity: int) -> None:
+        if quantity > 0:
+            self.actions.append({
+                "type": "buy",
+                "item": item,
+                "quantity": int(quantity),
+            })
+
+    def sell(self, item: str, quantity: int) -> None:
+        if quantity > 0:
+            self.actions.append({
+                "type": "sell",
+                "item": item,
+                "quantity": int(quantity),
+            })
+
+    def craft(self, item: str, quantity: int) -> None:
+        if quantity > 0:
+            self.actions.append({
+                "type": "craft",
+                "item": item,
+                "quantity": int(quantity),
+            })
+
+    def build(self, upgrade: str) -> None:
+        self.actions.append({
+            "type": "build",
+            "upgrade": upgrade,
+        })
+
+    def upkeep(self) -> None:
+        self.actions.append({"type": "upkeep"})
 
 
 # ============================================================
@@ -340,143 +298,71 @@ def deep_copy_dict(value):
 # ============================================================
 
 class Graph:
-    """
-    Graph supporting:
-
-        - standard routes
-        - fast routes
-        - parallel edges
-        - route reconstruction
-    """
-
-    def __init__(self, data):
+    def __init__(self, data: dict):
         self.adjacency = defaultdict(list)
-
-        self.vertices = set()
-
         self.standard_edges = {}
         self.fast_edges = {}
+        self.vertices = set()
 
-        self._build(data["routes"])
-
-    def _build(self, routes):
-        for route in routes:
-
+        for route in data["routes"]:
             a, b = route["between"]
-
             weight = int(route["weight"])
             toll = int(route.get("toll", 0))
+            fast = toll > 0
 
-            self.vertices.add(a)
-            self.vertices.add(b)
-
-            edge = {
+            e1 = {
                 "destination": b,
                 "weight": weight,
                 "toll": toll,
-                "fast": toll > 0,
+                "fast": fast,
             }
-
-            reverse_edge = {
+            e2 = {
                 "destination": a,
                 "weight": weight,
                 "toll": toll,
-                "fast": toll > 0,
+                "fast": fast,
             }
 
-            key = self._edge_key(a, b)
+            self.vertices.update((a, b))
 
-            if toll == 0:
-                self.standard_edges[key] = edge
-                self.standard_edges[self._edge_key(b, a)] = reverse_edge
-            else:
-                self.fast_edges[key] = edge
-                self.fast_edges[self._edge_key(b, a)] = reverse_edge
+            table = self.fast_edges if fast else self.standard_edges
+            table[(a, b)] = e1
+            table[(b, a)] = e2
 
-            self.adjacency[a].append(edge)
-            self.adjacency[b].append(reverse_edge)
-
-    @staticmethod
-    def _edge_key(a, b):
-        return (a, b)
+            self.adjacency[a].append(e1)
+            self.adjacency[b].append(e2)
 
     def get_edge(self, source, destination, fast=False):
-        """
-        Return the requested edge.
-
-        Returns None when it doesn't exist.
-        """
-
-        table = (
-            self.fast_edges
-            if fast
-            else self.standard_edges
-        )
-
-        return table.get(
-            self._edge_key(source, destination)
-        )
+        table = self.fast_edges if fast else self.standard_edges
+        return table.get((source, destination))
 
     def has_edge(self, source, destination, fast=False):
-        return self.get_edge(
-            source,
-            destination,
-            fast
-        ) is not None
-
-    def neighbours(self, node):
-        return self.adjacency.get(node, [])
+        return self.get_edge(source, destination, fast) is not None
 
 
 # ============================================================
-# SHORTEST PATH
+# PATH FINDING
 # ============================================================
 
 class PathFinder:
-    """
-    Dijkstra shortest path engine.
-
-    Level 3 supports Boots.
-
-    Without Boots:
-        normal edge weight
-
-    With Boots:
-        max(1, weight - 1)
-    """
-
-    def __init__(self, graph):
+    def __init__(self, graph: Graph):
         self.graph = graph
+        self.cache = {}
 
-    def edge_time(self, edge, boots=False):
+    @staticmethod
+    def edge_time(edge, boots=False):
         if boots:
-            return max(
-                1,
-                edge["weight"] - 1
-            )
-
-        return edge["weight"]
+            return max(1, int(edge["weight"]) - 1)
+        return int(edge["weight"])
 
     def shortest_path(
         self,
-        start,
-        end,
-        boots=False,
-        allow_fast=False,
-        enteloot=None,
-    ):
-        """
-        Find a shortest route.
-
-        Fast routes are optional.
-
-        When allow_fast=False:
-            only standard routes are used.
-
-        When allow_fast=True:
-            fast routes are considered when their toll
-            can be paid.
-        """
+        start: str,
+        end: str,
+        boots: bool = False,
+        allow_fast: bool = False,
+        enteloot: Optional[int] = None,
+    ) -> Optional[dict]:
 
         if start == end:
             return {
@@ -486,553 +372,337 @@ class PathFinder:
                 "fast_flags": [],
             }
 
-        pq = [
-            (0, 0, start)
-        ]
+        # We deliberately do not cache enteloot-dependent paths
+        # aggressively; this avoids stale affordability assumptions.
+        key = (
+            start,
+            end,
+            bool(boots),
+            bool(allow_fast),
+            None if enteloot is None else int(enteloot),
+        )
 
-        distances = {
-            start: (0, 0)
-        }
+        if key in self.cache:
+            return self.cache[key]
 
+        # Dijkstra objective:
+        # primarily time, then toll.
+        pq = [(0, 0, start)]
+        dist = {start: (0, 0)}
         previous = {}
 
         while pq:
+            time_so_far, toll_so_far, node = heapq.heappop(pq)
 
-            current_time, current_toll, node = heapq.heappop(pq)
-
-            known = distances.get(node)
-
-            if known is None:
+            if dist.get(node) != (time_so_far, toll_so_far):
                 continue
 
-            if (
-                current_time != known[0]
-                or current_toll != known[1]
-            ):
-                continue
+            if node == end:
+                break
 
-            for edge in self.graph.neighbours(node):
+            for edge in self.graph.adjacency.get(node, []):
+                is_fast = edge["fast"]
 
-                destination = edge["destination"]
-
-                edge_fast = edge["fast"]
-
-                if edge_fast and not allow_fast:
+                if is_fast and not allow_fast:
                     continue
 
-                if edge_fast:
-                    toll = edge["toll"]
+                toll = int(edge["toll"]) if is_fast else 0
 
-                    if enteloot is not None:
-                        if current_toll + toll > enteloot:
-                            continue
-                else:
-                    toll = 0
+                if enteloot is not None:
+                    if toll_so_far + toll > int(enteloot):
+                        continue
 
-                time = self.edge_time(
-                    edge,
-                    boots
-                )
+                edge_time = self.edge_time(edge, boots)
+                new_time = time_so_far + edge_time
+                new_toll = toll_so_far + toll
 
-                new_time = (
-                    current_time
-                    + time
-                )
+                dest = edge["destination"]
+                candidate = (new_time, new_toll)
 
-                new_toll = (
-                    current_toll
-                    + toll
-                )
-
-                old = distances.get(
-                    destination
-                )
-
-                candidate = (
-                    new_time,
-                    new_toll
-                )
-
-                if old is None or candidate < old:
-
-                    distances[destination] = candidate
-
-                    previous[destination] = (
-                        node,
-                        edge_fast
-                    )
-
+                if dest not in dist or candidate < dist[dest]:
+                    dist[dest] = candidate
+                    previous[dest] = (node, is_fast)
                     heapq.heappush(
                         pq,
-                        (
-                            new_time,
-                            new_toll,
-                            destination
-                        )
+                        (new_time, new_toll, dest),
                     )
 
-        if end not in distances:
+        if end not in dist:
             return None
 
         path = []
         fast_flags = []
+        cur = end
 
-        current = end
-
-        while current != start:
-
-            path.append(current)
-
-            previous_node, was_fast = previous[current]
-
+        while cur != start:
+            path.append(cur)
+            prev, was_fast = previous[cur]
             fast_flags.append(was_fast)
-
-            current = previous_node
+            cur = prev
 
         path.append(start)
-
         path.reverse()
         fast_flags.reverse()
 
-        return {
-            "time": distances[end][0],
-            "toll": distances[end][1],
+        result = {
+            "time": dist[end][0],
+            "toll": dist[end][1],
             "path": path,
             "fast_flags": fast_flags,
         }
 
-
-# ============================================================
-# ACTION BUILDER
-# ============================================================
-
-class ActionBuilder:
-
-    def __init__(self):
-        self.actions = []
-
-    def travel(self, destination, fast=False):
-        action = {
-            "type": "travel",
-            "destination": destination,
-        }
-
-        if fast:
-            action["fast"] = True
-
-        self.actions.append(action)
-
-    def gather(self):
-        self.actions.append({
-            "type": "gather"
-        })
-
-    def buy(self, resource, quantity):
-        if quantity <= 0:
-            return
-
-        self.actions.append({
-            "type": "buy",
-            "resource": resource,
-            "quantity": int(quantity),
-        })
-
-    def sell(self, item, quantity):
-        if quantity <= 0:
-            return
-
-        self.actions.append({
-            "type": "sell",
-            "item": item,
-            "quantity": int(quantity),
-        })
-
-    def craft(self, item, quantity):
-        if quantity <= 0:
-            return
-
-        self.actions.append({
-            "type": "craft",
-            "item": item,
-            "quantity": int(quantity),
-        })
-
-    def build(self, upgrade):
-        self.actions.append({
-            "type": "build",
-            "upgrade": upgrade,
-        })
-
-    def upkeep(self):
-        self.actions.append({
-            "type": "upkeep"
-        })
+        self.cache[key] = result
+        return result
 
 
 # ============================================================
-# STATE
+# ECONOMIC STATE
 # ============================================================
 
 class PlannerState:
+    """
+    Planner-side representation of the competition state.
 
-    def __init__(self, data):
+    Important:
+    passive town production and Enteloot are credited whenever
+    the global clock advances.
+    """
 
+    def __init__(self, data: dict):
         run = data["run"]
 
-        self.total_ticks = int(
-            run["total_ticks"]
-        )
-
+        self.total_ticks = int(run["total_ticks"])
         self.tick = 0
-
-        self.enteloot = int(
-            run["starting_enteloot"]
-        )
-
-        self.starting_town = (
-            run["starting_town"]
-        )
-
-        self.location = self.starting_town
+        self.enteloot = int(run["starting_enteloot"])
+        self.location = run["starting_town"]
 
         self.inventory = Counter()
-
         self.upgrades = defaultdict(set)
-
         self.tools = set()
-
         self.action_count = 0
 
-    def add_resource(self, resource, amount):
-        self.inventory[resource] += int(amount)
-
-    def consume(self, resource, amount):
-        if self.inventory[resource] < amount:
-            return False
-
-        self.inventory[resource] -= amount
-
-        if self.inventory[resource] <= 0:
-            del self.inventory[resource]
-
-        return True
-
-    def can_afford_components(self, components):
-        for item, amount in components.items():
-
-            if self.inventory[item] < amount:
-                return False
-
-        return True
-
-    def consume_components(self, components):
-        for item, amount in components.items():
-
-            if not self.consume(
-                item,
-                amount
-            ):
-                return False
-
-        return True
+        # Number of passive production cycles already credited.
+        self.resource_cycles = defaultdict(int)
+        self.enteloot_cycles = defaultdict(int)
 
     def has_upgrade(self, town, upgrade):
-        return (
-            upgrade in self.upgrades[town]
-        )
+        return upgrade in self.upgrades[town]
 
     def add_upgrade(self, town, upgrade):
         self.upgrades[town].add(upgrade)
 
     def has_tool(self, tool):
+        return normalise_name(tool) in self.tools
+
+    def add_resource(self, resource, amount):
+        if amount > 0:
+            self.inventory[resource] += int(amount)
+
+    def consume(self, item, amount) -> bool:
+        amount = int(amount)
+        if amount <= 0:
+            return True
+
+        if self.inventory[item] < amount:
+            return False
+
+        self.inventory[item] -= amount
+
+        if self.inventory[item] <= 0:
+            del self.inventory[item]
+
+        return True
+
+    def can_afford(self, items: Dict[str, int]) -> bool:
+        return all(
+            self.inventory[item] >= int(amount)
+            for item, amount in items.items()
+        )
+
+    def snapshot(self):
         return (
-            normalise_name(tool)
-            in self.tools
+            self.tick,
+            self.enteloot,
+            Counter(self.inventory),
+            defaultdict(set, {
+                town: set(upgrades)
+                for town, upgrades in self.upgrades.items()
+            }),
+            set(self.tools),
+            self.location,
+            dict(self.resource_cycles),
+            dict(self.enteloot_cycles),
+        )
+
+    def restore(self, snapshot):
+        (
+            self.tick,
+            self.enteloot,
+            inventory,
+            upgrades,
+            tools,
+            location,
+            resource_cycles,
+            enteloot_cycles,
+        ) = snapshot
+
+        self.inventory = Counter(inventory)
+        self.upgrades = defaultdict(
+            set,
+            {
+                town: set(items)
+                for town, items in upgrades.items()
+            },
+        )
+        self.tools = set(tools)
+        self.location = location
+        self.resource_cycles = defaultdict(
+            int,
+            resource_cycles,
+        )
+        self.enteloot_cycles = defaultdict(
+            int,
+            enteloot_cycles,
         )
 
 
 # ============================================================
-# PRODUCTION / PASSIVE ECONOMY
+# PASSIVE ECONOMY
 # ============================================================
 
 class Economy:
-
     def __init__(self, data):
+        self.data = data
 
-        self.towns = data["towns"]
-
-    def production_per_cycle(
-        self,
-        town,
-        resource,
-        state=None
-    ):
-        town_data = self.towns[town]
-
-        amount = (
-            town_data["production"]
-            ["resources"]
+    def production_amount(self, town, resource, state) -> int:
+        info = self.data["towns"][town]
+        amount = int(
+            info.get("production", {})
+            .get("resources", {})
             .get(resource, 0)
         )
 
-        if state is not None:
-
-            # Production upgrades double the
-            # corresponding resource.
-            production_upgrade = {
-                "Farmhouse": "sheep",
-                "Pier": "fish",
-                "Fertilised-fields": "wheat",
-                "Quarry": "stone",
-                "Woodlands": "wood",
-                "Pottery-house": "clay",
-            }
-
-            for upgrade, boosted_resource in (
-                production_upgrade.items()
+        for upgrade, boosted_resource in PRODUCTION_UPGRADES.items():
+            if boosted_resource == resource and state.has_upgrade(
+                town, upgrade
             ):
-
-                if (
-                    boosted_resource == resource
-                    and state.has_upgrade(
-                        town,
-                        upgrade
-                    )
-                ):
-                    amount *= 2
+                amount *= 2
 
         return int(amount)
 
-    def enteloot_per_cycle(
-        self,
-        town,
-        state=None
-    ):
-        town_data = self.towns[town]
+    def enteloot_amount(self, town, state) -> int:
+        info = self.data["towns"][town]
+        amount = int(info["enteloot"]["amount"])
 
-        amount = int(
-            town_data["enteloot"]["amount"]
-        )
+        bonus = 0
 
-        if state is None:
-            return amount
+        if state.has_upgrade(town, "Rec-center"):
+            bonus += 20
 
-        percentage = 0
+        if state.has_upgrade(town, "School"):
+            bonus += 50
 
-        if state.has_upgrade(
-            town,
-            "Rec-center"
-        ):
-            percentage += 20
+        if state.has_upgrade(town, "Library"):
+            bonus += 50
 
-        if state.has_upgrade(
-            town,
-            "School"
-        ):
-            percentage += 50
+        amount = math.floor(amount * (100 + bonus) / 100)
+        return int(amount)
 
-        if state.has_upgrade(
-            town,
-            "Library"
-        ):
-            percentage += 50
+    def enteloot_rate(self, town, state) -> int:
+        info = self.data["towns"][town]
+        rate = int(info["enteloot"]["rate"])
 
-        amount = (
-            amount
-            * (100 + percentage)
-            / 100
-        )
+        if state.has_upgrade(town, "Police-station"):
+            rate = max(1, rate - 2)
 
-        amount = int(amount)
+        return rate
 
-        production_upgrades = {
-            "Farmhouse": "sheep",
-            "Pier": "fish",
-            "Fertilised-fields": "wheat",
-            "Quarry": "stone",
-            "Woodlands": "wood",
-            "Pottery-house": "clay",
-        }
-
-        if any(
-            state.has_upgrade(
-                town,
-                upgrade
-            )
-            for upgrade in production_upgrades
-        ):
-            # Production upgrades themselves do not
-            # increase Enteloot according to the
-            # specification, so do nothing here.
-            pass
-
-        return amount
-
-
-# ============================================================
-# NODE ANALYSIS
-# ============================================================
-
-# ============================================================
-# NODE ANALYSIS
-# ============================================================
-
-class NodeManager:
-
-    def __init__(
-        self,
-        data,
-        pathfinder
-    ):
-        self.data = data
-        self.nodes = data["nodes"]
-        self.pathfinder = pathfinder
-
-    def nodes_for_resource(self, resource):
-        result = []
-
-        for node, info in self.nodes.items():
-
-            if info.get("resource") == resource:
-                result.append(node)
-
-        return result
-
-    def get_distance(
-        self,
-        start,
-        end
-    ):
+    def advance_to(self, state: PlannerState, new_tick: int):
         """
-        Return the shortest standard-route travel time
-        between two locations.
+        Apply passive systems for all cycles crossed by the clock.
 
-        Boots are deliberately not assumed here because
-        this method is used for general node ranking.
+        The specification uses:
+            floor(current_tick / rate) * amount
         """
+        if new_tick <= state.tick:
+            return
 
-        path = self.pathfinder.shortest_path(
-            start,
-            end,
-            boots=False,
-            allow_fast=False,
-        )
+        new_tick = min(int(new_tick), state.total_ticks)
 
-        if path is None:
-            return float("inf")
+        for town in sorted(self.data["towns"]):
+            info = self.data["towns"][town]
 
-        return path["time"]
-
-    def best_resource_node(
-        self,
-        resource,
-        current_location
-    ):
-        """
-        Select the resource node with the best economic
-        efficiency.
-
-        Score:
-
-            resource yield
-            -------------------------------
-            travel time + gather time
-
-        A higher score is better.
-        """
-
-        best_node = None
-        best_score = float("-inf")
-
-        for node_name, node in self.nodes.items():
-
-            if node.get("resource") != resource:
-                continue
-
-            yield_amount = int(
-                node.get("yield", 0)
+            # Resource production.
+            production_rate = int(
+                info.get("production", {}).get("rate", 0)
             )
 
-            gather_time = int(
-                node.get("gather-time", 999999)
-            )
+            if production_rate > 0:
+                cycles = new_tick // production_rate
+                old_cycles = state.resource_cycles[town]
 
-            travel_time = self.get_distance(
-                current_location,
-                node_name
-            )
+                if cycles > old_cycles:
+                    completed = cycles - old_cycles
 
-            if math.isinf(travel_time):
-                continue
+                    for resource in sorted(
+                        info.get("production", {})
+                        .get("resources", {})
+                    ):
+                        amount = self.production_amount(
+                            town,
+                            resource,
+                            state,
+                        )
+                        state.inventory[resource] += (
+                            completed * amount
+                        )
 
-            total_time = (
-                travel_time
-                + gather_time
-            )
+                    state.resource_cycles[town] = cycles
 
-            if total_time <= 0:
-                continue
+            # Enteloot generation.
+            enteloot_rate = self.enteloot_rate(town, state)
 
-            score = (
-                yield_amount
-                / total_time
-            )
+            if enteloot_rate > 0:
+                cycles = new_tick // enteloot_rate
+                old_cycles = state.enteloot_cycles[town]
 
-            if score > best_score:
+                if cycles > old_cycles:
+                    completed = cycles - old_cycles
+                    amount = self.enteloot_amount(town, state)
+                    state.enteloot += completed * amount
+                    state.enteloot_cycles[town] = cycles
 
-                best_score = score
-                best_node = node_name
-
-        return best_node
-
-    def ore_nodes(self):
-
-        return [
-            node
-            for node, info in self.nodes.items()
-            if info.get("resource") == "ore"
-        ]
+        state.tick = new_tick
 
 
 # ============================================================
-# RESOURCE ACQUISITION
+# RESOURCE NODE PLANNER
 # ============================================================
 
 class ResourcePlanner:
+    def __init__(self, data, graph, pathfinder, state, economy):
+        self.data = data
+        self.graph = graph
+        self.pathfinder = pathfinder
+        self.state = state
+        self.economy = economy
 
-    def __init__(
-            self,
-            data,
-            graph,
-            pathfinder,
-            state,
-        ):
+        self.nodes_by_resource = defaultdict(list)
+        for node, info in data["nodes"].items():
+            resource = info.get("resource")
+            if resource:
+                self.nodes_by_resource[resource].append(node)
 
-            self.data = data
-            self.graph = graph
-            self.pathfinder = pathfinder
-            self.state = state
-
-            self.node_manager = NodeManager(
-                data,
-                pathfinder
-            )
-
-    def nearest_node(
+    def best_node(
         self,
-        resource,
-        boots=False
-    ):
+        resource: str,
+        quantity: int = 1,
+    ) -> Optional[Tuple[str, dict, int]]:
 
-        candidates = (
-            self.node_manager
-            .nodes_for_resource(resource)
-        )
+        boots = self.state.has_tool("boots")
+        candidates = []
 
-        best = None
-
-        for node in candidates:
-
+        for node in sorted(self.nodes_by_resource.get(resource, [])):
             path = self.pathfinder.shortest_path(
                 self.state.location,
                 node,
@@ -1043,173 +713,156 @@ class ResourcePlanner:
             if path is None:
                 continue
 
-            score = (
-                path["time"]
-                + self.data["nodes"][node]["gather-time"]
+            info = self.data["nodes"][node]
+            yield_amount = int(info["yield"])
+            gather_time = int(info["gather-time"])
+
+            gathers = max(
+                1,
+                math.ceil(quantity / max(1, yield_amount)),
             )
 
-            if best is None or score < best[0]:
+            # Round trip estimate is more useful than one-way
+            # efficiency when collecting construction resources.
+            back = self.pathfinder.shortest_path(
+                node,
+                self.state.location,
+                boots=boots,
+                allow_fast=False,
+            )
 
-                best = (
-                    score,
-                    node,
-                    path
+            back_time = back["time"] if back else path["time"]
+
+            total_time = (
+                path["time"]
+                + gathers * max(
+                    1,
+                    gather_time
+                    - (1 if self.state.has_tool("pickaxe") else 0),
                 )
+                + back_time
+            )
 
-        return best
+            # Higher yield per tick is better.
+            efficiency = (
+                gathers * yield_amount
+            ) / max(1, total_time)
 
-    def gather_resource(
-        self,
-        resource,
-        quantity,
-        actions,
-    ):
-        """
-        Gather enough of a resource.
+            candidates.append(
+                (
+                    -efficiency,
+                    total_time,
+                    node,
+                    path,
+                )
+            )
 
-        This is deliberately deterministic.
+        if not candidates:
+            return None
 
-        For ore, gathering is mandatory because it
-        cannot be purchased.
-        """
+        candidates.sort()
+        _, _, node, path = candidates[0]
+        return node, path, int(self.data["nodes"][node]["yield"])
 
-        quantity = int(
-            math.ceil(quantity)
-        )
+    def gather(self, resource: str, quantity: int, actions) -> bool:
+        quantity = int(quantity)
 
         if quantity <= 0:
             return True
 
-        boots = self.state.has_tool(
-            "boots"
-        )
+        while self.state.inventory[resource] < quantity:
+            remaining = (
+                quantity
+                - self.state.inventory[resource]
+            )
 
-        pickaxe = self.state.has_tool(
-            "pickaxe"
-        )
-
-        while (
-            self.state.inventory[resource]
-            < quantity
-        ):
-
-            choice = self.nearest_node(
+            choice = self.best_node(
                 resource,
-                boots=boots
+                remaining,
             )
 
             if choice is None:
                 return False
 
-            _, node, path = choice
+            node, path, yield_amount = choice
 
-            if not self.move_using_path(
-                path,
-                actions
-            ):
+            if not self.move_path(path, actions):
                 return False
 
-            node_data = (
-                self.data["nodes"][node]
-            )
+            info = self.data["nodes"][node]
 
-            gather_time = int(
-                node_data["gather-time"]
-            )
+            gather_time = int(info["gather-time"])
 
-            if pickaxe:
-                gather_time = max(
-                    1,
-                    gather_time - 1
-                )
+            if self.state.has_tool("pickaxe"):
+                gather_time = max(1, gather_time - 1)
 
             if (
-                self.state.tick
-                + gather_time
+                self.state.tick + gather_time
                 > self.state.total_ticks
             ):
                 return False
 
             actions.gather()
-
-            self.state.tick += gather_time
-            self.state.action_count += 1
-
+            self.economy.advance_to(
+                self.state,
+                self.state.tick + gather_time,
+            )
             self.state.add_resource(
                 resource,
-                node_data["yield"]
+                int(info["yield"]),
             )
+            self.state.action_count += 1
 
         return True
 
-    def move_using_path(
-        self,
-        path,
-        actions
-    ):
-        """
-        Convert a shortest-path result into
-        travel actions.
-        """
-
+    def move_path(self, path: dict, actions) -> bool:
         vertices = path["path"]
-        fast_flags = path["fast_flags"]
+        flags = path["fast_flags"]
 
-        for i in range(
-            len(vertices) - 1
-        ):
-
+        for i in range(len(vertices) - 1):
             source = vertices[i]
             destination = vertices[i + 1]
-
-            fast = fast_flags[i]
+            fast = bool(flags[i])
 
             edge = self.graph.get_edge(
                 source,
                 destination,
-                fast=fast
+                fast=fast,
             )
 
             if edge is None:
                 return False
 
-            travel_time = (
-                self.pathfinder.edge_time(
-                    edge,
-                    self.state.has_tool(
-                        "boots"
-                    )
-                )
+            travel_time = self.pathfinder.edge_time(
+                edge,
+                boots=self.state.has_tool("boots"),
             )
 
             if (
-                self.state.tick
-                + travel_time
+                self.state.tick + travel_time
                 > self.state.total_ticks
             ):
                 return False
 
-            if fast:
+            toll = int(edge["toll"]) if fast else 0
 
-                toll = edge["toll"]
+            if self.state.enteloot < toll:
+                return False
 
-                if (
-                    self.state.enteloot
-                    < toll
-                ):
-                    return False
-
-                self.state.enteloot -= toll
+            self.state.enteloot -= toll
 
             actions.travel(
                 destination,
-                fast=fast
+                fast=fast,
             )
 
-            self.state.tick += travel_time
-            self.state.action_count += 1
+            self.economy.advance_to(
+                self.state,
+                self.state.tick + travel_time,
+            )
 
             self.state.location = destination
+            self.state.action_count += 1
 
         return True
 
@@ -1219,52 +872,26 @@ class ResourcePlanner:
 # ============================================================
 
 class CraftingPlanner:
-
-    def __init__(
-        self,
-        data,
-        state,
-        actions
-    ):
-
+    def __init__(self, data, state, actions, economy):
         self.data = data
         self.state = state
         self.actions = actions
+        self.economy = economy
 
-    def craft_time(self, town):
-        """
-        Return crafting time for the current location.
+    def craft_time(self) -> int:
+        town = self.state.location
 
-        Nodes are not towns, so if the player is standing
-        at a resource node, use the normal crafting time.
-        """
-
-        town_data = self.data["towns"].get(town)
-
-        if town_data is None:
-            return 2
-
-        affinities = town_data.get(
-            "affinities",
-            []
-        )
-
-        if "crafting" in affinities:
-            return 1
+        if town in self.data["towns"]:
+            affinities = self.data["towns"][town].get(
+                "affinities",
+                [],
+            )
+            if "crafting" in affinities:
+                return 1
 
         return 2
 
-    def craft_component(
-        self,
-        component,
-        quantity
-    ):
-        """
-        Craft a construction component.
-
-        Dependencies are recursively crafted first.
-        """
-
+    def craft_component(self, component: str, quantity: int) -> bool:
         quantity = int(quantity)
 
         if quantity <= 0:
@@ -1273,166 +900,49 @@ class CraftingPlanner:
         if component not in COMPONENTS:
             return False
 
+        # Ensure component dependencies first.
         recipe = COMPONENTS[component]
 
-        # First produce all component dependencies.
-        for ingredient, amount in (
-            recipe["inputs"].items()
-        ):
-
-            required = (
-                amount * quantity
-            )
-
+        for ingredient, amount in recipe["inputs"].items():
             if ingredient in COMPONENTS:
+                required = amount * quantity
+                missing = required - self.state.inventory[ingredient]
 
-                if self.state.inventory[
-                    ingredient
-                ] < required:
-
-                    missing = (
-                        required
-                        - self.state.inventory[
-                            ingredient
-                        ]
-                    )
-
+                if missing > 0:
                     if not self.craft_component(
                         ingredient,
-                        missing
+                        missing,
                     ):
                         return False
 
-        # Raw resources must now exist.
-        for ingredient, amount in (
-            recipe["inputs"].items()
-        ):
-
-            if ingredient in COMPONENTS:
-                continue
-
-            required = (
-                amount * quantity
-            )
-
-            if (
-                self.state.inventory[
-                    ingredient
-                ]
-                < required
-            ):
+        # All raw inputs must exist.
+        for ingredient, amount in recipe["inputs"].items():
+            required = amount * quantity
+            if self.state.inventory[ingredient] < required:
                 return False
 
-        # Consume inputs.
-        for ingredient, amount in (
-            recipe["inputs"].items()
-        ):
+        ticks = quantity * self.craft_time()
 
-            required = (
-                amount * quantity
-            )
+        if self.state.tick + ticks > self.state.total_ticks:
+            return False
 
+        # Consume only after every validation succeeds.
+        for ingredient, amount in recipe["inputs"].items():
             if not self.state.consume(
                 ingredient,
-                required
+                amount * quantity,
             ):
                 return False
 
-        craft_time = self.craft_time(
-            self.state.location
+        self.actions.craft(component, quantity)
+
+        self.economy.advance_to(
+            self.state,
+            self.state.tick + ticks,
         )
 
-        ticks = (
-            quantity
-            * craft_time
-        )
-
-        if (
-            self.state.tick + ticks
-            > self.state.total_ticks
-        ):
-            return False
-
-        self.actions.craft(
-            component,
-            quantity
-        )
-
-        self.state.tick += ticks
+        self.state.inventory[component] += quantity
         self.state.action_count += 1
-
-        self.state.inventory[
-            component
-        ] += quantity
-
-        return True
-
-    def craft_good(
-        self,
-        item,
-        quantity
-    ):
-        if item not in RECIPES:
-            return False
-
-        quantity = int(quantity)
-
-        recipe = RECIPES[item]
-
-        for resource, amount in (
-            recipe["inputs"].items()
-        ):
-
-            required = (
-                amount * quantity
-            )
-
-            if (
-                self.state.inventory[
-                    resource
-                ] < required
-            ):
-                return False
-
-        for resource, amount in (
-            recipe["inputs"].items()
-        ):
-
-            required = (
-                amount * quantity
-            )
-
-            self.state.consume(
-                resource,
-                required
-            )
-
-        craft_time = self.craft_time(
-            self.state.location
-        )
-
-        ticks = (
-            quantity
-            * craft_time
-        )
-
-        if (
-            self.state.tick + ticks
-            > self.state.total_ticks
-        ):
-            return False
-
-        self.actions.craft(
-            item,
-            quantity
-        )
-
-        self.state.tick += ticks
-        self.state.action_count += 1
-
-        self.state.inventory[
-            item
-        ] += quantity
 
         return True
 
@@ -1442,413 +952,424 @@ class CraftingPlanner:
 # ============================================================
 
 class UpgradeManager:
-
-    PRODUCTION_UPGRADES = {
-        "Farmhouse",
-        "Pier",
-        "Fertilised-fields",
-        "Quarry",
-        "Woodlands",
-        "Pottery-house",
-    }
-
     def __init__(
         self,
         data,
         state,
         actions,
-        crafting
+        economy,
+        crafting,
+        resource_planner,
+        pathfinder,
     ):
-
         self.data = data
         self.state = state
         self.actions = actions
+        self.economy = economy
         self.crafting = crafting
-
-    # --------------------------------------------------------
-    # FIX FOR YOUR ERROR
-    # --------------------------------------------------------
+        self.resources = resource_planner
+        self.pathfinder = pathfinder
 
     @staticmethod
     def prerequisite_satisfied(
         prerequisite,
-        town_upgrades
-    ):
-        """
-        Handle every supported prerequisite form.
-
-        The previous code effectively did:
-
-            prerequisites.get(...)
-
-        but some prerequisites are represented as
-        lists/strings rather than dictionaries.
-
-        This function deliberately supports:
-
-            None
-            string
-            list
-            tuple
-            set
-            dictionary
-        """
+        town_upgrades,
+    ) -> bool:
 
         if prerequisite is None:
             return True
 
-        if isinstance(
-            prerequisite,
-            str
-        ):
+        if isinstance(prerequisite, str):
             if prerequisite == "production":
-                return (
-                    len(
-                        town_upgrades
-                        & UpgradeManager
-                        .PRODUCTION_UPGRADES
-                    )
-                    >= 1
-                )
+                return len(
+                    town_upgrades
+                    & set(PRODUCTION_UPGRADES)
+                ) >= 1
 
             if prerequisite == "production2":
-                return (
-                    len(
-                        town_upgrades
-                        & UpgradeManager
-                        .PRODUCTION_UPGRADES
-                    )
-                    >= 2
-                )
+                return len(
+                    town_upgrades
+                    & set(PRODUCTION_UPGRADES)
+                ) >= 2
 
-            return (
-                prerequisite
-                in town_upgrades
-            )
+            return prerequisite in town_upgrades
 
-        if isinstance(
-            prerequisite,
-            (list, tuple, set)
-        ):
+        if isinstance(prerequisite, (list, tuple, set)):
             return all(
                 item in town_upgrades
                 for item in prerequisite
             )
 
-        if isinstance(
-            prerequisite,
-            dict
-        ):
-            for key, value in (
-                prerequisite.items()
-            ):
-
+        if isinstance(prerequisite, dict):
+            for key, value in prerequisite.items():
                 if key == "any":
-
-                    if isinstance(
-                        value,
-                        (list, tuple, set)
+                    if not any(
+                        item in town_upgrades
+                        for item in value
                     ):
-                        if not any(
-                            item in town_upgrades
-                            for item in value
-                        ):
-                            return False
-
+                        return False
                 elif key == "all":
-
-                    if isinstance(
-                        value,
-                        (list, tuple, set)
+                    if not all(
+                        item in town_upgrades
+                        for item in value
                     ):
-                        if not all(
-                            item in town_upgrades
-                            for item in value
-                        ):
-                            return False
-
+                        return False
                 elif key == "production":
-
                     count = len(
                         town_upgrades
-                        & UpgradeManager
-                        .PRODUCTION_UPGRADES
+                        & set(PRODUCTION_UPGRADES)
                     )
-
                     if count < int(value):
                         return False
-
-                else:
-
-                    if value and (
-                        key not in town_upgrades
-                    ):
-                        return False
+                elif value and key not in town_upgrades:
+                    return False
 
             return True
 
         return False
 
-    def can_build(
-        self,
-        town,
-        upgrade
-    ):
+    def can_build(self, town, upgrade) -> bool:
+        if town not in self.data["towns"]:
+            return False
+
         if upgrade not in UPGRADES:
             return False
 
-        if self.state.has_upgrade(
-            town,
-            upgrade
-        ):
+        if self.state.has_upgrade(town, upgrade):
             return False
 
         info = UPGRADES[upgrade]
 
-        prerequisite = (
-            info.get("prerequisite")
-        )
-
         if not self.prerequisite_satisfied(
-            prerequisite,
-            self.state.upgrades[town]
+            info["prerequisite"],
+            self.state.upgrades[town],
         ):
             return False
 
         if self.state.enteloot < info["enteloot"]:
             return False
 
-        if not self.state.can_afford_components(
-            info["components"]
-        ):
+        if not self.state.can_afford(info["components"]):
+            return False
+
+        if self.state.tick + int(info["time"]) > self.state.total_ticks:
             return False
 
         return True
 
-    def build(
-        self,
-        town,
-        upgrade
-    ):
-        if not self.can_build(
-            town,
-            upgrade
-        ):
-            return False
+    def ensure_crafting_town(self) -> bool:
+        if self.state.location in self.data["towns"]:
+            if "crafting" in self.data["towns"][
+                self.state.location
+            ].get("affinities", []):
+                return True
 
-        info = UPGRADES[upgrade]
+        candidates = []
 
-        if not self.state.consume_components(
-            info["components"]
-        ):
-            return False
+        for town in sorted(self.data["towns"]):
+            if "crafting" not in self.data["towns"][town].get(
+                "affinities",
+                [],
+            ):
+                continue
 
-        self.state.enteloot -= (
-            info["enteloot"]
-        )
-
-        ticks = int(
-            info["time"]
-        )
-
-        if (
-            self.state.tick + ticks
-            > self.state.total_ticks
-        ):
-            return False
-
-        self.actions.build(
-            upgrade
-        )
-
-        self.state.tick += ticks
-        self.state.action_count += 1
-
-        self.state.add_upgrade(
-            town,
-            upgrade
-        )
-
-        return True
-# ============================================================
-# RECIPE DEPENDENCY ENGINE
-# ============================================================
-
-class DependencyPlanner:
-
-    def __init__(self):
-        self.components = COMPONENTS
-
-    def expand(
-        self,
-        item,
-        quantity,
-        result=None
-    ):
-        """
-        Recursively expand a component recipe into
-        raw resources.
-
-        Example:
-
-            bricks
-              -> clay
-              -> mortar
-                   -> clay
-                   -> stone
-        """
-
-        if result is None:
-            result = Counter()
-
-        quantity = int(quantity)
-
-        # Raw resource
-        if item not in self.components:
-            result[item] += quantity
-            return result
-
-        recipe = self.components[item]
-
-        for ingredient, amount in recipe["inputs"].items():
-
-            self.expand(
-                ingredient,
-                amount * quantity,
-                result
+            path = self.pathfinder.shortest_path(
+                self.state.location,
+                town,
+                boots=self.state.has_tool("boots"),
+                allow_fast=False,
             )
 
-        return result
+            if path is not None:
+                candidates.append(
+                    (path["time"], town, path)
+                )
 
-    def raw_requirements(
-        self,
-        requirements
-    ):
+        if not candidates:
+            return False
+
+        candidates.sort(key=lambda x: (x[0], x[1]))
+        _, _, path = candidates[0]
+
+        return self.resources.move_path(
+            path,
+            self.actions,
+        )
+
+    def prepare_components(self, components: Dict[str, int]) -> bool:
+        missing = Counter()
+
+        for component, amount in components.items():
+            deficit = int(amount) - self.state.inventory[component]
+            if deficit > 0:
+                missing[component] = deficit
+
+        if not missing:
+            return True
+
+        # Work out all raw resources required.
+        raw = raw_requirements_for_components(missing)
+
+        # Prefer passive inventory first. Only gather actual deficits.
+        raw_missing = Counter()
+
+        for resource, amount in raw.items():
+            deficit = int(amount) - self.state.inventory[resource]
+            if deficit > 0:
+                raw_missing[resource] = deficit
+
+        # Ore cannot be bought and must be gathered.
+        # For all other resources, gathering is still usually
+        # preferable to buying when large construction quantities
+        # are involved.
+        for resource in sorted(raw_missing):
+            amount = raw_missing[resource]
+
+            if resource == "ore":
+                if not self.resources.gather(
+                    resource,
+                    amount,
+                    self.actions,
+                ):
+                    return False
+            else:
+                # Use nodes for large requirements.
+                # For tiny requirements, buy at a producing town
+                # if doing so avoids a long detour.
+                if not self.acquire_resource_efficiently(
+                    resource,
+                    amount,
+                ):
+                    return False
+
+        if not self.ensure_crafting_town():
+            return False
+
+        # Craft in dependency-safe order.
+        pending = Counter(missing)
+
+        # Repeatedly craft any component whose inputs are now ready.
+        made_progress = True
+
+        while pending and made_progress:
+            made_progress = False
+
+            for component in sorted(list(pending)):
+                amount = pending[component]
+
+                if amount <= 0:
+                    del pending[component]
+                    continue
+
+                if self.state.inventory[component] >= amount:
+                    del pending[component]
+                    made_progress = True
+                    continue
+
+                before = self.state.inventory[component]
+
+                if self.crafting.craft_component(
+                    component,
+                    amount,
+                ):
+                    if self.state.inventory[component] > before:
+                        del pending[component]
+                        made_progress = True
+
+        return not pending
+
+    def acquire_resource_efficiently(self, resource, amount) -> bool:
         """
-        Convert component requirements into
-        total raw resource requirements.
+        Decide between:
+            passive inventory,
+            gathering,
+            buying.
+
+        Passive inventory has already been removed from 'amount'.
+
+        Buying is only used when the nearest producing town is
+        materially cheaper in ticks than a node detour.
         """
+        if amount <= 0:
+            return True
 
-        result = Counter()
-
-        for item, quantity in requirements.items():
-
-            expanded = self.expand(
-                item,
-                quantity
+        # Ore cannot be bought.
+        if resource == "ore":
+            return self.resources.gather(
+                resource,
+                amount,
+                self.actions,
             )
 
-            result.update(expanded)
+        # Best resource node.
+        node_choice = self.resources.best_node(
+            resource,
+            amount,
+        )
 
-        return result
+        node_time = None
+        if node_choice is not None:
+            _, path, yield_amount = node_choice
+            node_info = self.data["nodes"][
+                node_choice[0]
+            ]
 
-# ============================================================
-# TOOL MANAGER
-# ============================================================
+            gather_time = int(node_info["gather-time"])
+            if self.state.has_tool("pickaxe"):
+                gather_time = max(1, gather_time - 1)
 
-class ToolManager:
+            gathers = max(
+                1,
+                math.ceil(amount / max(1, yield_amount)),
+            )
 
-    def __init__(
-        self,
-        state,
-        actions,
-        crafting
-    ):
+            back = self.pathfinder.shortest_path(
+                node_choice[0],
+                self.state.location,
+                boots=self.state.has_tool("boots"),
+                allow_fast=False,
+            )
 
-        self.state = state
-        self.actions = actions
-        self.crafting = crafting
+            node_time = (
+                path["time"]
+                + gathers * gather_time
+                + (back["time"] if back else path["time"])
+            )
 
-    def craft_tool(
-        self,
-        tool
-    ):
-        tool_key = normalise_name(tool)
+        # Find nearest producing town.
+        producing = []
 
-        if tool_key in self.state.tools:
-            return False
+        for town in sorted(self.data["towns"]):
+            resources = self.data["towns"][town].get(
+                "production",
+                {},
+            ).get("resources", {})
 
-        if tool_key not in TOOLS:
-            return False
+            if resource not in resources:
+                continue
 
-        info = TOOLS[tool_key]
+            path = self.pathfinder.shortest_path(
+                self.state.location,
+                town,
+                boots=self.state.has_tool("boots"),
+                allow_fast=False,
+            )
 
-        for item, amount in (
-            info["inputs"].items()
-        ):
+            if path is not None:
+                producing.append((path["time"], town, path))
 
-            if (
-                self.state.inventory[item]
-                < amount
+        buy_time = None
+        buy_town = None
+        buy_path = None
+
+        if producing:
+            producing.sort(key=lambda x: (x[0], x[1]))
+            buy_time, buy_town, buy_path = producing[0]
+
+            # One buy action is 1 tick regardless of quantity.
+            buy_time += 1
+
+        # Gathering usually saves Enteloot. Buying is attractive
+        # only when it saves a substantial amount of travel/gather time.
+        use_buy = (
+            buy_time is not None
+            and (
+                node_time is None
+                or buy_time + 3 < node_time
+            )
+            and self.state.enteloot
+            >= RESOURCE_BUY[resource] * amount
+        )
+
+        if use_buy:
+            if not self.resources.move_path(
+                buy_path,
+                self.actions,
             ):
                 return False
 
-        for item, amount in (
-            info["inputs"].items()
-        ):
+            cost = RESOURCE_BUY[resource] * amount
 
-            self.state.consume(
-                item,
-                amount
-            )
+            if self.state.enteloot < cost:
+                return False
 
-        craft_time = (
-            self.crafting.craft_time(
-                self.state.location
+            self.state.enteloot -= cost
+            self.actions.buy(resource, amount)
+
+            self.economy.advance_to(
+                self.state,
+                self.state.tick + 1,
             )
+            self.state.inventory[resource] += amount
+            self.state.action_count += 1
+            return True
+
+        return self.resources.gather(
+            resource,
+            amount,
+            self.actions,
         )
 
-        if (
-            self.state.tick
-            + craft_time
-            > self.state.total_ticks
-        ):
+    def build(self, town, upgrade) -> bool:
+        """
+        Transaction-safe build.
+
+        Crucially, time is checked BEFORE consuming components
+        or Enteloot.
+        """
+        if not self.can_build(town, upgrade):
             return False
 
-        self.actions.craft(
-            tool,
-            1
-        )
+        if self.state.location != town:
+            path = self.pathfinder.shortest_path(
+                self.state.location,
+                town,
+                boots=self.state.has_tool("boots"),
+                allow_fast=True,
+                enteloot=self.state.enteloot,
+            )
 
-        self.state.tick += craft_time
-        self.state.action_count += 1
+            if path is None:
+                return False
 
-        self.state.tools.add(
-            tool_key
-        )
+            if not self.resources.move_path(
+                path,
+                self.actions,
+            ):
+                return False
 
-        return True
-
-
-# ============================================================
-# RAW RESOURCE REQUIREMENTS
-# ============================================================
-
-def total_raw_requirements_for_upgrades(
-    upgrades
-):
-    """
-    Determine the raw resource requirements for
-    a collection of upgrades.
-
-    This is used for planning rather than execution.
-    """
-
-    dependency = DependencyPlanner()
-
-    component_requirements = Counter()
-
-    for upgrade in upgrades:
+        # Location may have changed, so validate again.
+        if not self.can_build(town, upgrade):
+            return False
 
         info = UPGRADES[upgrade]
+        build_time = int(info["time"])
 
-        component_requirements.update(
-            info["components"]
+        if self.state.tick + build_time > self.state.total_ticks:
+            return False
+
+        if not self.state.can_afford(info["components"]):
+            return False
+
+        if self.state.enteloot < int(info["enteloot"]):
+            return False
+
+        # Commit only now.
+        for component, amount in info["components"].items():
+            if not self.state.consume(component, amount):
+                return False
+
+        self.state.enteloot -= int(info["enteloot"])
+        self.actions.build(upgrade)
+
+        self.economy.advance_to(
+            self.state,
+            self.state.tick + build_time,
         )
 
-    return dependency.raw_requirements(
-        component_requirements
-    )
+        self.state.add_upgrade(town, upgrade)
+        self.state.action_count += 1
+        return True
 
 
 # ============================================================
@@ -1856,1295 +1377,999 @@ def total_raw_requirements_for_upgrades(
 # ============================================================
 
 class Level3Strategy:
+    """
+    Dynamic Level 3 strategy.
+
+    The planner does not hard-code "six production upgrades"
+    or "three civic towns".
+
+    It repeatedly asks:
+        Which feasible infrastructure investment gives the
+        strongest combination of immediate score, future
+        Enteloot, civic-chain unlocks and tick efficiency?
+    """
 
     def __init__(self, data):
-
         self.data = data
-
         self.graph = Graph(data)
+        self.pathfinder = PathFinder(self.graph)
 
-        self.pathfinder = PathFinder(
-            self.graph
-        )
-
-        self.node_manager = NodeManager(
-            data,
-            self.pathfinder
-        )
-
-        self.state = PlannerState(
-            data
-        )
-
+        self.state = PlannerState(data)
         self.actions = ActionBuilder()
+        self.economy = Economy(data)
 
-        self.economy = Economy(
-            data
+        self.resources = ResourcePlanner(
+            data,
+            self.graph,
+            self.pathfinder,
+            self.state,
+            self.economy,
         )
 
         self.crafting = CraftingPlanner(
             data,
             self.state,
-            self.actions
-        )
-
-        self.resource_planner = (
-            ResourcePlanner(
-                data,
-                self.graph,
-                self.pathfinder,
-                self.state
-            )
+            self.actions,
+            self.economy,
         )
 
         self.upgrades = UpgradeManager(
             data,
             self.state,
             self.actions,
-            self.crafting
-        )
-
-        self.tools = ToolManager(
-            self.state,
-            self.actions,
-            self.crafting
-        )
-
-        self.actions = ActionBuilder()
-
-        self.economy = Economy(
-            data
-        )
-
-        self.crafting = CraftingPlanner(
-            data,
-            self.state,
-            self.actions
-        )
-
-        self.resource_planner = (
-            ResourcePlanner(
-                data,
-                self.graph,
-                self.pathfinder,
-                self.state
-            )
-        )
-
-        self.upgrades = UpgradeManager(
-            data,
-            self.state,
-            self.actions,
-            self.crafting
-        )
-
-        self.tools = ToolManager(
-            self.state,
-            self.actions,
-            self.crafting
+            self.economy,
+            self.crafting,
+            self.resources,
+            self.pathfinder,
         )
 
     # --------------------------------------------------------
-    # TRAVEL
+    # Town ranking
     # --------------------------------------------------------
 
-    def travel_to(
-        self,
-        destination,
-        prefer_fast=False
-    ):
-        """
-        Travel from the current location.
+    def town_value(self, town) -> float:
+        info = self.data["towns"][town]
 
-        Fast routes are used only when they provide a
-        meaningful time saving relative to their toll.
-        """
+        enteloot_rate = int(info["enteloot"]["rate"])
+        enteloot_amount = int(info["enteloot"]["amount"])
 
-        if (
-            self.state.location
-            == destination
-        ):
-            return True
+        if enteloot_rate <= 0:
+            passive = 0
+        else:
+            passive = enteloot_amount / enteloot_rate
 
-        boots = self.state.has_tool(
-            "boots"
+        production_count = len(
+            info.get("production", {}).get("resources", {})
         )
 
-        standard = (
-            self.pathfinder.shortest_path(
-                self.state.location,
-                destination,
-                boots=boots,
-                allow_fast=False,
-            )
+        crafting_bonus = (
+            800
+            if "crafting" in info.get("affinities", [])
+            else 0
         )
 
-        fast = None
-
-        if prefer_fast:
-            fast = (
-                self.pathfinder.shortest_path(
-                    self.state.location,
-                    destination,
-                    boots=boots,
-                    allow_fast=True,
-                    enteloot=self.state.enteloot,
-                )
-            )
-
-        selected = standard
-
-        if fast is not None:
-
-            if standard is None:
-
-                selected = fast
-
-            else:
-
-                time_saved = (
-                    standard["time"]
-                    - fast["time"]
-                )
-
-                toll = fast["toll"]
-
-                # Fast route is worthwhile when the
-                # saved ticks are substantial and the
-                # toll is affordable.
-                if (
-                    time_saved >= 2
-                    and toll <= max(
-                        250,
-                        time_saved * 50
-                    )
-                ):
-                    selected = fast
-
-        if selected is None:
-            return False
-
-        return self.resource_planner.move_using_path(
-            selected,
-            self.actions
+        return (
+            passive * 100
+            + production_count * 250
+            + crafting_bonus
         )
 
-    # --------------------------------------------------------
-    # RESOURCE COLLECTION
-    # --------------------------------------------------------
-
-    def obtain_resources(
-        self,
-        requirements
-    ):
-        """
-        Obtain the required raw resources.
-
-        Strategy:
-
-        1. Use resource nodes where possible.
-        2. Ore must always be gathered.
-        3. Other resources are gathered from
-           nodes rather than buying them.
-        """
-
-        ordered = sorted(
-            requirements.items(),
-            key=lambda pair: (
-                pair[0] != "ore",
-                -pair[1]
-            )
-        )
-
-        for resource, amount in ordered:
-
-            current = (
-                self.state.inventory[
-                    resource
-                ]
-            )
-
-            missing = (
-                amount - current
-            )
-
-            if missing <= 0:
-                continue
-
-            # Ore cannot be purchased.
-            if resource == "ore":
-
-                if not self.resource_planner.gather_resource(
-                    resource,
-                    missing,
-                    self.actions
-                ):
-                    return False
-
-                continue
-
-            if not self.resource_planner.gather_resource(
-                resource,
-                missing,
-                self.actions
-            ):
-                return False
-
-        return True
-
-    # --------------------------------------------------------
-    # COMPONENT CRAFTING
-    # --------------------------------------------------------
-
-    def produce_component_tree(
-    self,
-    requirements
-):
-        """
-        Produce all components in dependency order.
-
-        Components can only be crafted at towns.
-
-        If the strategy is currently at a resource node,
-        return to the nearest town with crafting affinity
-        before crafting.
-        """
-
-        # --------------------------------------------------------
-        # Make sure we are at a town
-        # --------------------------------------------------------
-
-        if self.state.location not in self.data["towns"]:
-
-            crafting_towns = [
-                town_name
-                for town_name, town_info
-                in self.data["towns"].items()
-                if "crafting"
-                in town_info.get(
-                    "affinities",
-                    []
-                )
-            ]
-
-            if not crafting_towns:
-                return False
-
-            best_town = None
-            best_path = None
-
-            for town in crafting_towns:
-
-                path = self.pathfinder.shortest_path(
-                    self.state.location,
-                    town,
-                    boots=self.state.has_tool(
-                        "boots"
-                    ),
-                    allow_fast=False,
-                )
-
-                if path is None:
-                    continue
-
-                if (
-                    best_path is None
-                    or path["time"] < best_path["time"]
-                ):
-                    best_town = town
-                    best_path = path
-
-            if best_town is None:
-                return False
-
-            if not self.resource_planner.move_using_path(
-                best_path,
-                self.actions
-            ):
-                return False
-
-        # --------------------------------------------------------
-        # Components with deeper dependencies first
-        # --------------------------------------------------------
-
-        ordered = [
-            "mortar",
-            "bricks",
-            "rope",
-            "fencing",
-            "nets",
-            "kiln-glass",
-            "iron-fittings",
-            "planks",
-            "thatch",
-            "stone-blocks",
-        ]
-
-        remaining = Counter(
-            requirements
-        )
-
-        # --------------------------------------------------------
-        # Craft components
-        # --------------------------------------------------------
-
-        for component in ordered:
-
-            amount = remaining.get(
-                component,
-                0
-            )
-
-            if amount <= 0:
-                continue
-
-            current = (
-                self.state.inventory[
-                    component
-                ]
-            )
-
-            missing = (
-                amount - current
-            )
-
-            if missing <= 0:
-                continue
-
-            if not self.crafting.craft_component(
-                component,
-                missing
-            ):
-                return False
-
-        return True
-
-    # --------------------------------------------------------
-    # UPGRADE PLANNING
-    # --------------------------------------------------------
-
-    def production_upgrade_priority(
-        self
-    ):
-        """
-        Rank production upgrades according to how much
-        passive production they can potentially improve.
-
-        Targon and Shurima, for example, have high
-        Enteloot production, but production upgrades
-        affect resources rather than Enteloot directly.
-        """
-
-        result = []
-
-        for town, info in (
-            self.data["towns"].items()
-        ):
-
-            resources = (
-                info["production"]["resources"]
-            )
-
-            for upgrade, upgrade_info in (
-                UPGRADES.items()
-            ):
-
-                if upgrade_info[
-                    "boost"
-                ] in resources:
-
-                    amount = resources[
-                        upgrade_info["boost"]
-                    ]
-
-                    score = (
-                        amount
-                        * 100
-                        + info["enteloot"]["amount"]
-                    )
-
-                    result.append(
-                        (
-                            score,
-                            town,
-                            upgrade
-                        )
-                    )
-
-        result.sort(
-            key=lambda x: (
-                -x[0],
-                x[1],
-                x[2]
-            )
-        )
-
-        return result
-
-    def choose_infrastructure_towns(
-        self
-    ):
-        """
-        Prefer towns with strong Enteloot generation.
-
-        Civic upgrades have a much larger infrastructure
-        score value, so these towns are attractive targets.
-        """
-
-        towns = list(
-            self.data["towns"].keys()
-        )
-
-        towns.sort(
+    def infrastructure_towns(self) -> List[str]:
+        return sorted(
+            self.data["towns"],
             key=lambda town: (
-                -self.data["towns"][town]
-                ["enteloot"]["amount"],
-                self.data["towns"][town]
-                ["enteloot"]["rate"],
-                town
-            )
+                -self.town_value(town),
+                town,
+            ),
         )
 
-        return towns
-    
-    def travel_to_crafting_town(self):
+    # --------------------------------------------------------
+    # Tool planning
+    # --------------------------------------------------------
+
+    def estimate_future_gathers(self) -> int:
         """
-        Move to the nearest town with crafting affinity.
-
-        This method is safe when the current location is a
-        resource node such as N19 or N21.
+        Estimate the number of future gather actions implied
+        by construction requirements for the high-value civic
+        chains.
         """
+        # Conservative estimate. It intentionally favours
+        # tools when the map has many nodes and construction
+        # requirements are large.
+        return max(
+            20,
+            len(self.data["nodes"]) // 2,
+        )
 
-        current = self.state.location
+    def estimate_future_travel_edges(self) -> int:
+        return max(
+            30,
+            len(self.data["towns"]),
+        )
 
-        # Already in a crafting town.
-        if current in self.data["towns"]:
+    def tool_priority(self) -> List[str]:
+        pickaxe_value = self.estimate_future_gathers()
+        boots_value = self.estimate_future_travel_edges()
 
-            affinities = (
-                self.data["towns"][current]
-                .get("affinities", [])
-            )
+        if pickaxe_value > boots_value:
+            return ["pickaxe", "boots"]
 
-            if "crafting" in affinities:
-                return True
+        if boots_value > pickaxe_value:
+            return ["boots", "pickaxe"]
 
-        crafting_towns = [
-            town
-            for town, info in self.data["towns"].items()
-            if "crafting" in info.get(
-                "affinities",
-                []
-            )
+        return ["boots", "pickaxe"]
+
+    def required_tool_resources(self, tool_order) -> Counter:
+        required = Counter()
+
+        # Each tool requires 2 iron-fittings.
+        # Each iron-fitting requires 2 ore + 1 wood.
+        for tool in tool_order:
+            required["iron-fittings"] += 2
+            required["rope" if tool == "boots" else "planks"] += 2
+
+        # Expand fittings to raw.
+        expanded = raw_requirements(required)
+        return expanded
+
+    def prepare_tools(self):
+        """
+        Acquire enough raw materials for both tools and craft
+        the more useful one first.
+
+        We only do this if the map/run has enough budget.
+        """
+        order = self.tool_priority()
+
+        missing_tools = [
+            tool for tool in order
+            if not self.state.has_tool(tool)
         ]
 
-        if not crafting_towns:
-            return False
+        if not missing_tools:
+            return
 
-        best_town = None
-        best_path = None
-
-        boots = self.state.has_tool("boots")
-
-        for town in crafting_towns:
-
-            path = self.pathfinder.shortest_path(
-                current,
-                town,
-                boots=boots,
-                allow_fast=False
-            )
-
-            if path is None:
-                continue
-
-            if (
-                best_path is None
-                or path["time"] < best_path["time"]
-            ):
-                best_town = town
-                best_path = path
-
-        if best_town is None:
-            return False
-
-        return self.resource_planner.move_using_path(
-            best_path,
-            self.actions
+        raw_needed = self.required_tool_resources(
+            missing_tools
         )
 
+        # Use passive inventory first.
+        deficits = Counter()
+
+        for resource, amount in raw_needed.items():
+            deficit = amount - self.state.inventory[resource]
+            if deficit > 0:
+                deficits[resource] = deficit
+
+        for resource in sorted(deficits):
+            self.upgrades.acquire_resource_efficiently(
+                resource,
+                deficits[resource],
+            )
+
+        # Craft at the best available crafting town.
+        self.upgrades.ensure_crafting_town()
+
+        # Build fittings first.
+        fittings_needed = 2 * len(missing_tools)
+
+        if self.state.inventory["iron-fittings"] < fittings_needed:
+            missing = (
+                fittings_needed
+                - self.state.inventory["iron-fittings"]
+            )
+
+            self.crafting.craft_component(
+                "iron-fittings",
+                missing,
+            )
+
+        for tool in order:
+            if self.state.has_tool(tool):
+                continue
+
+            info = TOOLS[tool]
+
+            if not self.state.can_afford(info["inputs"]):
+                continue
+
+            craft_time = self.crafting.craft_time()
+
+            if self.state.tick + craft_time > self.state.total_ticks:
+                continue
+
+            for item, amount in info["inputs"].items():
+                self.state.consume(item, amount)
+
+            self.actions.craft(tool, 1)
+
+            self.economy.advance_to(
+                self.state,
+                self.state.tick + craft_time,
+            )
+
+            self.state.tools.add(normalise_name(tool))
+            self.state.action_count += 1
+
     # --------------------------------------------------------
-    # TOOLS
+    # Upgrade valuation
     # --------------------------------------------------------
 
-    def plan_tools(self):
-        """
-        Level 3 tool order.
+    def future_enteloot_value(
+        self,
+        town: str,
+        upgrade: str,
+    ) -> float:
 
-        Pickaxe is normally acquired first because it
-        reduces the cost of every later gathering action.
+        remaining = max(
+            0,
+            self.state.total_ticks - self.state.tick,
+        )
 
-        Boots then reduce future travel.
-        """
+        info = UPGRADES[upgrade]
+        boost = info["boost"]
 
-        if not self.state.has_tool(
-            "pickaxe"
-        ):
-            if self.tools.craft_tool(
-                "pickaxe"
-            ):
-                pass
+        current_rate = self.economy.enteloot_rate(
+            town,
+            self.state,
+        )
+        current_amount = self.economy.enteloot_amount(
+            town,
+            self.state,
+        )
 
-        if not self.state.has_tool(
-            "boots"
-        ):
-            if self.tools.craft_tool(
-                "boots"
-            ):
-                pass
+        if current_rate <= 0:
+            return 0
 
-    # --------------------------------------------------------
-    # PREPARE FOR AN UPGRADE
-    # --------------------------------------------------------
+        before_cycles = remaining // current_rate
 
-    def prepare_upgrade(
-    self,
-    town,
-    upgrade
-):
-        """
-        Gather and craft everything required for an upgrade.
+        before = before_cycles * current_amount
 
-        Resource nodes and towns are different location types.
-        Therefore we always move to a crafting town before
-        crafting components.
-        """
+        if boost == "enteloot_amount_20":
+            after_amount = math.floor(
+                current_amount * 1.20
+            )
+            after = before_cycles * after_amount
 
-        if upgrade not in UPGRADES:
-            return False
+        elif boost == "enteloot_amount_50":
+            after_amount = math.floor(
+                current_amount * 1.50
+            )
+            after = before_cycles * after_amount
+
+        elif boost == "enteloot_rate_minus_2":
+            after_rate = max(1, current_rate - 2)
+            after_cycles = remaining // after_rate
+            after = after_cycles * current_amount
+
+        else:
+            after = before
+
+        return max(0, after - before)
+
+    def civic_chain_bonus(
+        self,
+        town: str,
+        upgrade: str,
+    ) -> int:
+
+        current = self.state.upgrades[town]
+        production_count = len(
+            current & set(PRODUCTION_UPGRADES)
+        )
+
+        # Value of what this upgrade unlocks next.
+        if upgrade in PRODUCTION_UPGRADES:
+            if production_count == 0:
+                return 3000 + 5000 + 6000
+            if production_count == 1:
+                return 4000 + 5000
+            return 0
+
+        if upgrade == "Rec-center":
+            return 5000 + 6000
+
+        if upgrade == "School":
+            return 6000
+
+        if upgrade == "Fire-station":
+            return 5000
+
+        return 0
+
+    def production_upgrade_value(
+        self,
+        town: str,
+        upgrade: str,
+    ) -> float:
+
+        resource = PRODUCTION_UPGRADES[upgrade]
+        info = self.data["towns"][town]
+
+        base = int(
+            info.get("production", {})
+            .get("resources", {})
+            .get(resource, 0)
+        )
+
+        if base <= 0:
+            return float("-inf")
+
+        rate = int(info["production"]["rate"])
+
+        if rate <= 0:
+            return float("-inf")
+
+        remaining = max(
+            0,
+            self.state.total_ticks - self.state.tick,
+        )
+
+        future_cycles = remaining // rate
+        extra_resource = future_cycles * base
+
+        raw_value = (
+            extra_resource
+            * RESOURCE_SELL.get(resource, 0)
+        )
+
+        return raw_value
+
+    def estimate_upgrade_cost_ticks(
+        self,
+        town: str,
+        upgrade: str,
+    ) -> Optional[int]:
 
         info = UPGRADES[upgrade]
 
-        required_components = Counter(
+        # Estimate travel.
+        travel_path = self.pathfinder.shortest_path(
+            self.state.location,
+            town,
+            boots=self.state.has_tool("boots"),
+            allow_fast=False,
+        )
+
+        travel_time = (
+            travel_path["time"]
+            if travel_path is not None
+            else None
+        )
+
+        if travel_time is None:
+            return None
+
+        raw = raw_requirements(
             info["components"]
         )
 
-        missing_components = Counter()
+        gather_time = 0
 
-        for component, amount in required_components.items():
+        for resource, quantity in raw.items():
+            if resource == "ore":
+                node_choice = self.resources.best_node(
+                    resource,
+                    quantity,
+                )
+                if node_choice is None:
+                    return None
 
-            current = self.state.inventory[component]
+                node, path, yield_amount = node_choice
+                gather_time += path["time"]
 
-            if current < amount:
-                missing_components[component] = (
-                    amount - current
+                gather = max(
+                    1,
+                    math.ceil(
+                        quantity
+                        / max(1, yield_amount)
+                    ),
                 )
 
-        # --------------------------------------------------------
-        # Nothing needs to be crafted.
-        # --------------------------------------------------------
+                gt = int(
+                    self.data["nodes"][node]["gather-time"]
+                )
 
-        if not missing_components:
-            return True
+                if self.state.has_tool("pickaxe"):
+                    gt = max(1, gt - 1)
 
-        # --------------------------------------------------------
-        # Determine raw resources required.
-        # --------------------------------------------------------
+                gather_time += gather * gt
 
-        raw_requirements = (
-            DependencyPlanner()
-            .raw_requirements(
-                missing_components
+            else:
+                # Use a rough node estimate.
+                node_choice = self.resources.best_node(
+                    resource,
+                    quantity,
+                )
+
+                if node_choice is not None:
+                    node, path, yield_amount = node_choice
+                    gather_time += path["time"]
+
+                    gather = max(
+                        1,
+                        math.ceil(
+                            quantity
+                            / max(1, yield_amount)
+                        ),
+                    )
+
+                    gt = int(
+                        self.data["nodes"][node]["gather-time"]
+                    )
+
+                    if self.state.has_tool("pickaxe"):
+                        gt = max(1, gt - 1)
+
+                    gather_time += gather * gt
+                else:
+                    # Could be supplied passively.
+                    gather_time += 0
+
+        craft_time = sum(
+            max(1, quantity)
+            for quantity in info["components"].values()
+        )
+
+        # This is intentionally an estimate used for ranking.
+        return (
+            travel_time
+            + gather_time
+            + craft_time
+            + int(info["time"])
+        )
+
+    def evaluate_upgrade(
+        self,
+        town: str,
+        upgrade: str,
+    ) -> Optional[float]:
+
+        if not self.upgrades.can_build(town, upgrade):
+            # A future candidate can still be valuable even when
+            # components/money aren't currently available, but it
+            # must satisfy static prerequisites.
+            info = UPGRADES.get(upgrade)
+            if info is None:
+                return None
+
+            if self.state.has_upgrade(town, upgrade):
+                return None
+
+            if not self.upgrades.prerequisite_satisfied(
+                info["prerequisite"],
+                self.state.upgrades[town],
+            ):
+                return None
+
+        info = UPGRADES[upgrade]
+
+        direct = int(info["score"])
+
+        chain = self.civic_chain_bonus(
+            town,
+            upgrade,
+        )
+
+        passive = self.future_enteloot_value(
+            town,
+            upgrade,
+        )
+
+        production = 0
+
+        if upgrade in PRODUCTION_UPGRADES:
+            production = self.production_upgrade_value(
+                town,
+                upgrade,
             )
+
+        cost_ticks = self.estimate_upgrade_cost_ticks(
+            town,
+            upgrade,
         )
 
-        # --------------------------------------------------------
-        # Gather raw resources.
-        #
-        # This may move us to resource nodes such as N19,
-        # N21, etc.
-        # --------------------------------------------------------
+        if cost_ticks is None:
+            return None
 
-        if not self.obtain_resources(
-            raw_requirements
-        ):
-            return False
-
-        # --------------------------------------------------------
-        # Return to a crafting town.
-        #
-        # IMPORTANT:
-        # self.state.location may currently be a node.
-        # --------------------------------------------------------
-
-        if not self.travel_to_crafting_town():
-            return False
-
-        # --------------------------------------------------------
-        # Craft the required components.
-        # --------------------------------------------------------
-
-        if not self.produce_component_tree(
-            missing_components
-        ):
-            return False
-
-        return True
-
-    # --------------------------------------------------------
-    # BUILD PRODUCTION
-    # --------------------------------------------------------
-
-    def build_production_upgrades(self):
-        """
-        Build a useful first layer of production upgrades.
-
-        We do not blindly attempt every upgrade because
-        every build consumes Enteloot and ticks.
-        """
-
-        candidates = (
-            self.production_upgrade_priority()
+        # We deliberately give infrastructure score the greatest
+        # weight because the specification says it is the primary
+        # Level 3 scoring driver.
+        total_value = (
+            direct
+            + chain
+            + passive
+            + 0.25 * production
         )
 
-        built = 0
+        # Tick efficiency.
+        return total_value / max(1, cost_ticks)
 
-        for _, town, upgrade in candidates:
+    # --------------------------------------------------------
+    # Upgrade execution
+    # --------------------------------------------------------
 
-            if self.state.has_upgrade(
-                town,
-                upgrade
-            ):
-                continue
+    def candidate_upgrades(self) -> List[Tuple[float, str, str]]:
+        candidates = []
 
-            if not self.prepare_upgrade(
-                town,
-                upgrade
-            ):
-                continue
-
-            if self.state.location != town:
-
-                if not self.travel_to(
-                    town,
-                    prefer_fast=True
-                ):
+        for town in sorted(self.data["towns"]):
+            for upgrade in sorted(UPGRADES):
+                if self.state.has_upgrade(town, upgrade):
                     continue
 
-            if self.upgrades.build(
-                town,
-                upgrade
-            ):
-                built += 1
+                value = self.evaluate_upgrade(
+                    town,
+                    upgrade,
+                )
 
-            # Build a controlled first layer.
-            if built >= 6:
-                break
+                if value is None:
+                    continue
 
-        return built
+                candidates.append(
+                    (value, town, upgrade)
+                )
 
-    # --------------------------------------------------------
-    # CIVIC CHAIN
-    # --------------------------------------------------------
-
-    def build_civic_chain(
-        self,
-        town
-    ):
-        """
-        Attempt:
-
-            production upgrade(s)
-                ↓
-            Rec-center
-                ↓
-            School
-                ↓
-            Library
-
-        and:
-
-            two production upgrades
-                ↓
-            Fire-station
-                ↓
-            Police-station
-        """
-
-        # ----------------------------------------------------
-        # First production upgrades
-        # ----------------------------------------------------
-
-        production = [
-            upgrade
-            for upgrade in UPGRADES
-            if upgrade in (
-                UpgradeManager
-                .PRODUCTION_UPGRADES
+        candidates.sort(
+            key=lambda x: (
+                -x[0],
+                x[1],
+                x[2],
             )
-        ]
+        )
 
-        built_here = 0
+        return candidates
 
-        for upgrade in production:
+    def execute_best_feasible_upgrade(self) -> bool:
+        """
+        Choose a currently executable upgrade by score/tick value.
+        """
+        candidates = self.candidate_upgrades()
 
-            if built_here >= 2:
-                break
+        for _, town, upgrade in candidates:
+            info = UPGRADES[upgrade]
 
-            if self.state.has_upgrade(
+            # Don't commit to a build whose raw materials are
+            # obviously impossible inside the remaining budget.
+            estimate = self.estimate_upgrade_cost_ticks(
                 town,
-                upgrade
-            ):
-                built_here += 1
+                upgrade,
+            )
+
+            if estimate is None:
                 continue
 
-            # Only choose upgrades whose resource
-            # the town actually produces.
-            boost = UPGRADES[
-                upgrade
-            ]["boost"]
+            remaining = (
+                self.state.total_ticks
+                - self.state.tick
+            )
 
-            if boost not in (
-                self.data["towns"][town]
-                ["production"]["resources"]
-            ):
+            if estimate > remaining:
                 continue
 
-            if not self.prepare_upgrade(
-                town,
-                upgrade
+            # Prepare components.
+            if not self.upgrades.prepare_components(
+                info["components"],
             ):
                 continue
 
-            if self.state.location != town:
-
-                if not self.travel_to(
-                    town,
-                    prefer_fast=True
-                ):
-                    return False
-
+            # Move/build.
             if self.upgrades.build(
                 town,
-                upgrade
+                upgrade,
             ):
-                built_here += 1
+                return True
 
-        # ----------------------------------------------------
-        # Rec-center
-        # ----------------------------------------------------
+        return False
 
-        civic_chain = [
-            "Rec-center",
-            "School",
-            "Library",
-        ]
+    # --------------------------------------------------------
+    # Profitable crafting
+    # --------------------------------------------------------
 
-        for upgrade in civic_chain:
+    def best_craft_trade(self):
+        """
+        If construction cannot currently be executed, use
+        surplus passive resources to create a sellable good.
 
-            if self.state.has_upgrade(
-                town,
-                upgrade
-            ):
+        This prevents the planner from idling with large amounts
+        of unused raw resources.
+        """
+        if self.state.location not in self.data["towns"]:
+            return False
+
+        town = self.state.location
+        affinity = "crafting" in self.data["towns"][town].get(
+            "affinities",
+            [],
+        )
+
+        craft_time = 1 if affinity else 2
+
+        best = None
+
+        for item, recipe in RECIPES.items():
+            quantity = math.inf
+
+            for resource, amount in recipe["inputs"].items():
+                quantity = min(
+                    quantity,
+                    self.state.inventory[resource] // amount,
+                )
+
+            if quantity == math.inf or quantity <= 0:
                 continue
 
-            if not self.prepare_upgrade(
-                town,
-                upgrade
-            ):
+            quantity = int(min(quantity, 1000))
+
+            prices = [
+                int(
+                    self.data["towns"][sell_town]
+                    .get("item-rates", {})
+                    .get(item, 0)
+                )
+                for sell_town in self.data["towns"]
+            ]
+
+            if not prices:
                 continue
 
-            if self.state.location != town:
+            best_price = max(prices)
 
-                if not self.travel_to(
-                    town,
-                    prefer_fast=True
-                ):
-                    return False
+            raw_value = sum(
+                amount
+                * RESOURCE_SELL.get(resource, 0)
+                for resource, amount in recipe["inputs"].items()
+            )
 
-            if not self.upgrades.build(
-                town,
-                upgrade
-            ):
+            profit = best_price - raw_value
+
+            if profit <= 0:
+                continue
+
+            score = (
+                profit
+                / max(1, craft_time)
+            )
+
+            candidate = (
+                score,
+                item,
+                quantity,
+                best_price,
+            )
+
+            if best is None or candidate > best:
+                best = candidate
+
+        if best is None:
+            return False
+
+        _, item, quantity, _ = best
+        recipe = RECIPES[item]
+
+        # Craft only a bounded batch to preserve flexibility for
+        # construction.
+        quantity = min(quantity, 50)
+
+        for resource, amount in recipe["inputs"].items():
+            if self.state.inventory[resource] < amount * quantity:
                 return False
 
-        # ----------------------------------------------------
-        # Fire station
-        # ----------------------------------------------------
+        for resource, amount in recipe["inputs"].items():
+            self.state.consume(
+                resource,
+                amount * quantity,
+            )
 
-        if not self.state.has_upgrade(
-            town,
-            "Fire-station"
-        ):
+        ticks = quantity * craft_time
 
-            if self.prepare_upgrade(
-                town,
-                "Fire-station"
-            ):
+        if self.state.tick + ticks > self.state.total_ticks:
+            return False
 
-                if self.state.location != town:
+        self.actions.craft(item, quantity)
 
-                    if not self.travel_to(
-                        town,
-                        prefer_fast=True
-                    ):
-                        return False
+        self.economy.advance_to(
+            self.state,
+            self.state.tick + ticks,
+        )
 
-                self.upgrades.build(
-                    town,
-                    "Fire-station"
+        self.state.inventory[item] += quantity
+        self.state.action_count += 1
+
+        # Sell at best-paying town.
+        sell_candidates = []
+
+        for sell_town in sorted(self.data["towns"]):
+            price = int(
+                self.data["towns"][sell_town]
+                .get("item-rates", {})
+                .get(item, 0)
+            )
+
+            if price <= 0:
+                continue
+
+            path = self.pathfinder.shortest_path(
+                self.state.location,
+                sell_town,
+                boots=self.state.has_tool("boots"),
+                allow_fast=True,
+                enteloot=self.state.enteloot,
+            )
+
+            if path is not None:
+                sell_candidates.append(
+                    (-price, path["time"], sell_town, path)
                 )
 
-        # ----------------------------------------------------
-        # Police station
-        # ----------------------------------------------------
+        if not sell_candidates:
+            return True
 
-        if not self.state.has_upgrade(
-            town,
-            "Police-station"
+        sell_candidates.sort()
+        _, _, sell_town, path = sell_candidates[0]
+
+        if not self.resources.move_path(
+            path,
+            self.actions,
         ):
+            return True
 
-            if self.prepare_upgrade(
-                town,
-                "Police-station"
-            ):
+        self.actions.sell(item, quantity)
 
-                if self.state.location != town:
+        # Selling costs 1 tick and creates Enteloot.
+        price = int(
+            self.data["towns"][sell_town]
+            .get("item-rates", {})
+            .get(item, 0)
+        )
 
-                    if not self.travel_to(
-                        town,
-                        prefer_fast=True
-                    ):
-                        return False
+        if self.state.tick + 1 <= self.state.total_ticks:
+            self.economy.advance_to(
+                self.state,
+                self.state.tick + 1,
+            )
+            self.state.enteloot += price * quantity
+            self.state.inventory[item] -= quantity
+            if self.state.inventory[item] <= 0:
+                del self.state.inventory[item]
 
-                self.upgrades.build(
-                    town,
-                    "Police-station"
-                )
-
+        self.state.action_count += 1
         return True
 
     # --------------------------------------------------------
-    # KEEP TIME MOVING
+    # Final safe advancement
     # --------------------------------------------------------
 
-    def consume_remaining_ticks(self):
+    def advance_final_window(self):
         """
-        Use safe one-tick sell actions to advance time.
+        We never deliberately submit malformed actions.
 
-        Passive town production occurs according to current
-        tick, so this allows the run to reach the final
-        tick without invalid actions.
-
-        We only do this while there is no better planned
-        infrastructure action.
+        If resources exist, sell them in a valid one-tick action.
+        Otherwise, stop: the engine will advance passive systems
+        when the final valid action reaches its endpoint.
         """
-
-        # Selling an item we actually have is safer than
-        # trying to buy/sell nonexistent inventory.
         while self.state.tick < self.state.total_ticks:
-
             available = [
                 item
-                for item, amount
-                in self.state.inventory.items()
-                if amount > 0
+                for item, quantity in self.state.inventory.items()
+                if quantity > 0
+                and item not in COMPONENTS
             ]
 
             if not available:
                 break
 
-            item = sorted(
-                available
-            )[0]
+            item = sorted(available)[0]
 
-            amount = self.state.inventory[
-                item
-            ]
+            # Selling one is always a one-tick action.
+            self.actions.sell(item, 1)
 
-            # Sell one at a time so we never overshoot
-            # the tick budget.
-            self.actions.sell(
-                item,
-                1
+            price = RESOURCE_SELL.get(item)
+
+            if price is None:
+                # Crafted good.
+                towns = [
+                    int(
+                        self.data["towns"][town]
+                        .get("item-rates", {})
+                        .get(item, 0)
+                    )
+                    for town in self.data["towns"]
+                ]
+                price = max(towns) if towns else 0
+
+            self.state.consume(item, 1)
+
+            self.economy.advance_to(
+                self.state,
+                self.state.tick + 1,
             )
 
-            self.state.inventory[
-                item
-            ] -= 1
-
-            if self.state.inventory[
-                item
-            ] <= 0:
-                del self.state.inventory[
-                    item
-                ]
-
-            self.state.tick += 1
+            self.state.enteloot += price
             self.state.action_count += 1
 
     # --------------------------------------------------------
-    # MAIN STRATEGY
+    # Main
     # --------------------------------------------------------
 
-    def run(self):
+    def run(self) -> List[dict]:
 
-        # ====================================================
-        # PHASE 1
-        # Acquire ore and basic resources.
-        # ====================================================
+        # ----------------------------------------------------
+        # Stage 1:
+        # Let passive production accumulate while obtaining
+        # enough resources to make Level 3 tools worthwhile.
+        # ----------------------------------------------------
 
-        ore_node = self.node_manager.best_resource_node(
-            "ore",
-            self.state.location
-        )
+        self.prepare_tools()
 
-        if ore_node is not None:
+        # ----------------------------------------------------
+        # Stage 2:
+        # Main infrastructure loop.
+        # ----------------------------------------------------
 
-            path = self.pathfinder.shortest_path(
-                self.state.location,
-                ore_node,
-                boots=False,
-                allow_fast=False,
-            )
+        failed_rounds = 0
 
-            if path is not None:
+        while self.state.tick < self.state.total_ticks:
+            before = self.state.snapshot()
 
-                self.resource_planner.move_using_path(
-                    path,
-                    self.actions
-                )
+            if self.execute_best_feasible_upgrade():
+                failed_rounds = 0
+                continue
 
-                node_info = (
-                    self.data["nodes"][ore_node]
-                )
+            # If no build is currently feasible, try a profitable
+            # craft/sell cycle with surplus resources.
+            if self.best_craft_trade():
+                failed_rounds = 0
+                continue
 
-                # Enough ore for the two tools and
-                # potentially police infrastructure.
-                ore_target = 8
+            # If we cannot immediately invest, acquire a small
+            # amount of the most useful missing resource for the
+            # best high-value upgrade.
+            candidates = self.candidate_upgrades()
 
-                while (
-                    self.state.inventory["ore"]
-                    < ore_target
+            acquired = False
+
+            for _, town, upgrade in candidates[:10]:
+                info = UPGRADES[upgrade]
+
+                raw = raw_requirements(info["components"])
+
+                deficits = {
+                    resource: amount - self.state.inventory[resource]
+                    for resource, amount in raw.items()
+                    if amount > self.state.inventory[resource]
+                }
+
+                if not deficits:
+                    continue
+
+                # Acquire the largest economically useful deficit.
+                resource, amount = sorted(
+                    deficits.items(),
+                    key=lambda x: (-x[1], x[0]),
+                )[0]
+
+                amount = min(amount, 25)
+
+                if self.upgrades.acquire_resource_efficiently(
+                    resource,
+                    amount,
                 ):
+                    acquired = True
+                    break
 
-                    gather_time = int(
-                        node_info["gather-time"]
-                    )
+            if acquired:
+                continue
 
-                    if (
-                        self.state.tick
-                        + gather_time
-                        > self.state.total_ticks
-                    ):
-                        break
+            # No useful operation found.
+            failed_rounds += 1
 
-                    self.actions.gather()
-
-                    self.state.tick += gather_time
-                    self.state.action_count += 1
-
-                    self.state.add_resource(
-                        "ore",
-                        node_info["yield"]
-                    )
-
-        # ====================================================
-        # PHASE 2
-        # Get the resources needed for tool crafting.
-        # ====================================================
-
-        tool_raw = {
-            "rope": 2,
-            "planks": 2,
-            "wood": 2,
-            "sheep": 2,
-        }
-
-        # We need iron fittings.
-        iron_raw = {
-            "ore": 4,
-            "wood": 2,
-        }
-
-        self.obtain_resources(
-            iron_raw
-        )
-
-        # Craft iron fittings.
-        self.produce_component_tree(
-            {
-                "iron-fittings": 2
-            }
-        )
-
-        # Gather raw tool resources.
-        self.obtain_resources(
-            tool_raw
-        )
-
-        # Craft rope/planks.
-        self.produce_component_tree(
-            {
-                "rope": 2,
-                "planks": 2
-            }
-        )
-
-        # ====================================================
-        # PHASE 3
-        # Craft Pickaxe first.
-        # ====================================================
-
-        self.tools.craft_tool(
-            "pickaxe"
-        )
-
-        # ====================================================
-        # PHASE 4
-        # Gather another batch of ore using Pickaxe.
-        # ====================================================
-
-        if self.state.inventory["ore"] < 8:
-
-            self.obtain_resources(
-                {
-                    "ore":
-                    8
-                    - self.state.inventory["ore"]
-                }
-            )
-
-        # ====================================================
-        # PHASE 5
-        # Boots.
-        # ====================================================
-
-        # Need another 2 iron fittings.
-        if (
-            self.state.inventory[
-                "iron-fittings"
-            ] < 2
-        ):
-
-            needed = (
-                2
-                - self.state.inventory[
-                    "iron-fittings"
-                ]
-            )
-
-            raw = {
-                "ore": 2 * needed,
-                "wood": 1 * needed,
-            }
-
-            self.obtain_resources(
-                raw
-            )
-
-            self.produce_component_tree(
-                {
-                    "iron-fittings":
-                    needed
-                }
-            )
-
-        # Need rope.
-        if self.state.inventory[
-            "rope"
-        ] < 2:
-
-            needed = (
-                2
-                - self.state.inventory[
-                    "rope"
-                ]
-            )
-
-            self.obtain_resources(
-                {
-                    "sheep": 2 * needed
-                }
-            )
-
-            self.produce_component_tree(
-                {
-                    "rope": needed
-                }
-            )
-
-        self.tools.craft_tool(
-            "boots"
-        )
-
-        # ====================================================
-        # PHASE 6
-        # Build production upgrades.
-        # ====================================================
-
-        self.build_production_upgrades()
-
-        # ====================================================
-        # PHASE 7
-        # Civic infrastructure.
-        # ====================================================
-
-        towns = (
-            self.choose_infrastructure_towns()
-        )
-
-        # Only attempt a limited number of civic chains
-        # because each one requires a large amount of
-        # construction material.
-        civic_attempts = 0
-
-        for town in towns:
-
-            if civic_attempts >= 3:
+            if failed_rounds >= 2:
                 break
 
-            if self.state.tick >= (
-                self.state.total_ticks - 1000
-            ):
-                break
+            self.state.restore(before)
+            break
 
-            if self.build_civic_chain(
-                town
-            ):
-                civic_attempts += 1
+        # ----------------------------------------------------
+        # Stage 3:
+        # Use any remaining sellable inventory without creating
+        # invalid actions.
+        # ----------------------------------------------------
 
-        # ====================================================
-        # PHASE 8
-        # Final safe actions.
-        # ====================================================
-
-        self.consume_remaining_ticks()
+        self.advance_final_window()
 
         return self.actions.actions
 
 
 # ============================================================
-# VALIDATION
+# SUBMISSION VALIDATION
 # ============================================================
 
 class SubmissionValidator:
+    """
+    Lightweight structural validator.
+
+    It deliberately does not pretend to reproduce every server-side
+    economic rule. The actual competition engine remains authoritative.
+    """
 
     def __init__(self, data):
-
+        self.data = data
         self.graph = Graph(data)
 
-    def validate_action(
-        self,
-        action,
-        current_location
-    ):
-        if not isinstance(
-            action,
-            dict
-        ):
-            return False, "Action is not a dictionary."
-
-        action_type = action.get(
-            "type"
-        )
-
-        if action_type == "travel":
-
-            destination = action.get(
-                "destination"
-            )
-
-            if destination is None:
-                return False, (
-                    "Travel action has no destination."
-                )
-
-            fast = bool(
-                action.get(
-                    "fast",
-                    False
-                )
-            )
-
-            if not self.graph.has_edge(
-                current_location,
-                destination,
-                fast=fast
-            ):
-                return False, (
-                    f"Invalid travel: "
-                    f"{current_location} -> "
-                    f"{destination}, "
-                    f"fast={fast}"
-                )
-
-            return True, None
-
-        if action_type == "gather":
-
-            if current_location not in (
-                self.graph.vertices
-            ):
-                return False, (
-                    "Gather from invalid location."
-                )
-
-            return True, None
-
-        if action_type in {
-            "buy",
-            "sell",
-            "craft",
-            "build",
-            "upkeep",
-        }:
-
-            # These activities occur at towns.
-            # The actual game engine performs the detailed
-            # prerequisite validation.
-            return True, None
-
-        return False, (
-            f"Unknown action type: "
-            f"{action_type}"
-        )
-
-    def validate(
-        self,
-        actions,
-        starting_town
-    ):
-        location = starting_town
-
+    def validate(self, actions) -> List[Tuple[int, str]]:
         errors = []
+        location = self.data["run"]["starting_town"]
 
-        for index, action in enumerate(
-            actions
-        ):
-
-            valid, error = (
-                self.validate_action(
-                    action,
-                    location
-                )
-            )
-
-            if not valid:
-
-                errors.append(
-                    (
-                        index,
-                        error
-                    )
-                )
-
+        for index, action in enumerate(actions):
+            if not isinstance(action, dict):
+                errors.append((index, "Action is not an object."))
                 continue
 
-            if action["type"] == "travel":
+            action_type = action.get("type")
 
-                location = action[
-                    "destination"
-                ]
+            if action_type == "travel":
+                destination = action.get("destination")
+                if destination is None:
+                    errors.append((index, "Travel has no destination."))
+                    continue
+
+                fast = bool(action.get("fast", False))
+
+                if not self.graph.has_edge(
+                    location,
+                    destination,
+                    fast=fast,
+                ):
+                    errors.append(
+                        (
+                            index,
+                            f"Invalid route {location} -> "
+                            f"{destination}, fast={fast}",
+                        )
+                    )
+                else:
+                    location = destination
+
+            elif action_type == "gather":
+                if location not in self.data["nodes"]:
+                    errors.append(
+                        (
+                            index,
+                            "Gather action is not at a resource node.",
+                        )
+                    )
+
+            elif action_type == "buy":
+                if "item" not in action or "quantity" not in action:
+                    errors.append(
+                        (index, "Buy must contain item and quantity.")
+                    )
+
+            elif action_type == "sell":
+                if "item" not in action or "quantity" not in action:
+                    errors.append(
+                        (index, "Sell must contain item and quantity.")
+                    )
+
+            elif action_type == "craft":
+                if "item" not in action or "quantity" not in action:
+                    errors.append(
+                        (index, "Craft must contain item and quantity.")
+                    )
+
+            elif action_type == "build":
+                if "upgrade" not in action:
+                    errors.append(
+                        (index, "Build must contain upgrade.")
+                    )
+
+            elif action_type == "upkeep":
+                pass
+
+            else:
+                errors.append(
+                    (index, f"Unknown action type: {action_type}")
+                )
 
         return errors
 
@@ -3153,180 +2378,72 @@ class SubmissionValidator:
 # OUTPUT
 # ============================================================
 
-def create_submission(
-    actions,
-    filename
-):
-    """
-    Create the exact competition JSON structure.
-    """
-
-    output = {
-        "actions": actions
-    }
-
-    with open(
-        filename,
-        "w",
-        encoding="utf-8"
-    ) as file:
-
+def write_submission(actions, filename="level3_submission.txt"):
+    with open(filename, "w", encoding="utf-8") as f:
         json.dump(
-            output,
-            file,
-            indent=2
+            {"actions": actions},
+            f,
+            indent=2,
         )
 
 
-# ============================================================
-# SUMMARY
-# ============================================================
-
-def print_summary(
-    data,
-    strategy,
-    actions,
-    validation_errors
-):
-
+def print_summary(strategy: Level3Strategy, errors):
     state = strategy.state
 
-    print()
-    print("=" * 70)
-    print("LEVEL 3 SOLUTION")
-    print("=" * 70)
+    print("=" * 72)
+    print("AGE OF ENTELAND - OPTIMISED LEVEL 3")
+    print("=" * 72)
 
-    print(
-        f"Starting town: "
-        f"{data['run']['starting_town']}"
-    )
-
-    print(
-        f"Total tick budget: "
-        f"{data['run']['total_ticks']}"
-    )
-
-    print(
-        f"Ticks used by planner: "
-        f"{state.tick}"
-    )
-
-    print(
-        f"Ticks remaining: "
-        f"{max(0, state.total_ticks - state.tick)}"
-    )
-
-    print(
-        f"Actions generated: "
-        f"{len(actions)}"
-    )
-
-    print(
-        f"Final planned Enteloot: "
-        f"{state.enteloot}"
-    )
+    print(f"Tick: {state.tick}/{state.total_ticks}")
+    print(f"Actions: {len(strategy.actions.actions)}")
+    print(f"Enteloot: {state.enteloot}")
 
     print()
-
     print("Tools:")
-
-    if state.tools:
-        for tool in sorted(
-            state.tools
-        ):
-            print(
-                f"  - {tool}"
-            )
-    else:
+    for tool in sorted(state.tools):
+        print(f"  {tool}")
+    if not state.tools:
         print("  none")
 
     print()
-
     print("Upgrades:")
-
-    total_upgrades = 0
-
-    for town in sorted(
-        state.upgrades
-    ):
-
-        upgrades = sorted(
-            state.upgrades[town]
-        )
-
+    total = 0
+    for town in sorted(state.upgrades):
+        upgrades = sorted(state.upgrades[town])
         if upgrades:
+            print(f"  {town}: {', '.join(upgrades)}")
+            total += len(upgrades)
 
-            print(
-                f"  {town}: "
-                f"{', '.join(upgrades)}"
-            )
-
-            total_upgrades += len(
-                upgrades
-            )
-
-    if total_upgrades == 0:
+    if total == 0:
         print("  none")
 
-    print()
-
-    print(
-        f"Total planned upgrades: "
-        f"{total_upgrades}"
-    )
+    print(f"\nTotal upgrades: {total}")
 
     print()
+    print("Top inventory:")
+    for item, amount in sorted(
+        state.inventory.items(),
+        key=lambda x: (-x[1], x[0]),
+    )[:20]:
+        print(f"  {item}: {amount}")
 
-    if validation_errors:
-
-        print(
-            "VALIDATION ERRORS:"
-        )
-
-        for index, error in (
-            validation_errors[:20]
-        ):
-
-            print(
-                f"  Action {index}: "
-                f"{error}"
-            )
-
-        if len(validation_errors) > 20:
-
-            print(
-                f"  ... and "
-                f"{len(validation_errors) - 20}"
-                f" more."
-            )
-
+    print()
+    if errors:
+        print(f"VALIDATION WARNINGS: {len(errors)}")
+        for index, message in errors[:20]:
+            print(f"  Action {index}: {message}")
     else:
+        print("STRUCTURAL VALIDATION: PASS")
 
-        print(
-            "Action validation: PASS"
-        )
-
-    print()
-
-    print(
-        "Current location: "
-        f"{state.location}"
-    )
-
-    print("=" * 70)
+    print("=" * 72)
 
 
 # ============================================================
 # MAIN
 # ============================================================
 
-def main():
-
-    # --------------------------------------------------------
-    # Input file
-    # --------------------------------------------------------
-
-    input_candidates = [
+def find_input_file() -> str:
+    candidates = [
         "level3.json",
         "level_3.json",
         "3.json",
@@ -3334,128 +2451,52 @@ def main():
         "input.json",
     ]
 
-    input_file = None
-
-    for filename in input_candidates:
-
+    for filename in candidates:
         if os.path.exists(filename):
+            return filename
 
-            input_file = filename
-            break
-
-    if input_file is None:
-
-        raise FileNotFoundError(
-            "Could not find the Level 3 input file.\n"
-            "Expected one of:\n"
-            + "\n".join(
-                f"  - {name}"
-                for name in input_candidates
-            )
-        )
-
-    print(
-        f"Loading Level 3 input: "
-        f"{input_file}"
+    raise FileNotFoundError(
+        "Could not find the Level 3 JSON input.\n"
+        "Expected one of:\n"
+        + "\n".join(f"  - {x}" for x in candidates)
     )
 
-    data = load_input(
-        input_file
-    )
 
-    # --------------------------------------------------------
-    # Basic validation
-    # --------------------------------------------------------
+def main():
+    input_file = find_input_file()
 
-    required_top_level = {
-        "run",
-        "towns",
-        "nodes",
-        "routes",
-    }
+    print(f"Loading: {input_file}")
 
-    missing = (
-        required_top_level
-        - set(data.keys())
-    )
+    data = load_input(input_file)
+
+    required = {"run", "towns", "nodes", "routes"}
+    missing = required - set(data)
 
     if missing:
-
         raise ValueError(
-            "Level JSON is missing fields: "
-            + ", ".join(
-                sorted(missing)
-            )
+            "Input missing required fields: "
+            + ", ".join(sorted(missing))
         )
 
     print(
-        f"Loaded "
-        f"{len(data['towns'])} towns, "
+        f"Loaded {len(data['towns'])} towns, "
         f"{len(data['nodes'])} nodes, "
         f"{len(data['routes'])} routes."
     )
 
-    # --------------------------------------------------------
-    # Strategy
-    # --------------------------------------------------------
-
-    print()
-    print(
-        "Generating Level 3 strategy..."
-    )
-
-    strategy = Level3Strategy(
-        data
-    )
-
+    strategy = Level3Strategy(data)
     actions = strategy.run()
 
-    # --------------------------------------------------------
-    # Validate
-    # --------------------------------------------------------
+    validator = SubmissionValidator(data)
+    errors = validator.validate(actions)
 
-    validator = SubmissionValidator(
-        data
-    )
+    output_file = "level3_submission.txt"
+    write_submission(actions, output_file)
 
-    errors = validator.validate(
-        actions,
-        data["run"]["starting_town"]
-    )
-
-    # --------------------------------------------------------
-    # Output
-    # --------------------------------------------------------
-
-    output_file = (
-        "level3_submission.txt"
-    )
-
-    create_submission(
-        actions,
-        output_file
-    )
-
-    # --------------------------------------------------------
-    # Summary
-    # --------------------------------------------------------
-
-    print_summary(
-        data,
-        strategy,
-        actions,
-        errors
-    )
+    print_summary(strategy, errors)
 
     print()
-    print(
-        "Submission file:"
-    )
-    print(
-        os.path.abspath(
-            output_file
-        )
-    )
+    print(f"Submission written to: {os.path.abspath(output_file)}")
 
 
 if __name__ == "__main__":
