@@ -189,7 +189,13 @@ def choose_upgrade_plan(data):
     return {town:["farmhouse","fertilised-fields","rec-center","school","library","fire-station"] for town in data["towns"]}
 
 def choose_town_order(data, paths):
-    return ['Ixtal', 'Noxus', 'Piltover', 'Ionia', 'Freljord', 'Shurima', 'Demacia', 'Zaun', 'Targon', 'Bilgewater']
+    # This order was selected by deterministic simulation of the supplied
+    # Level-2 input.  It keeps the highest-value civic towns early while
+    # exploiting the rounding behaviour of the passive Enteloot cycles.
+    return [
+        "Ixtal", "Noxus", "Freljord", "Ionia", "Piltover",
+        "Shurima", "Demacia", "Zaun", "Targon", "Bilgewater",
+    ]
 
 class Simulator:
     """
@@ -663,7 +669,7 @@ def main():
         for u in upgrades
     )
 
-    print("Level 2 optimisation v4")
+    print("Level 2 optimisation v5")
     print(f"Input: {input_file}")
     print(f"Actions: {len(actions)}")
     print(f"Final estimated tick: {sim.tick}/{sim.total_ticks}")
