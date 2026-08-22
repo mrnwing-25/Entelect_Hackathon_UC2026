@@ -43,16 +43,6 @@ COMPONENTS = {
     "kiln-glass": {"inputs": {"clay": 2, "wood": 2}, "time": 2},
     "nets": {"inputs": {"rope": 1, "fencing": 1}, "time": 2},
     "iron-fittings": {"inputs": {"ore": 2, "wood": 1}, "time": 2},
-    "planks": {"inputs": {"wood": 2}, "time": 2},
-    "thatch": {"inputs": {"wheat": 2}, "time": 2},
-    "stone-blocks": {"inputs": {"stone": 3}, "time": 2},
-    "mortar": {"inputs": {"clay": 1, "stone": 1}, "time": 2},
-    "bricks": {"inputs": {"clay": 2, "mortar": 1}, "time": 2},
-    "rope": {"inputs": {"sheep": 2}, "time": 2},
-    "fencing": {"inputs": {"wood": 2, "rope": 1}, "time": 2},
-    "kiln-glass": {"inputs": {"clay": 2, "wood": 2}, "time": 2},
-    "nets": {"inputs": {"rope": 1, "fencing": 1}, "time": 2},
-    "iron-fittings": {"inputs": {"ore": 2, "wood": 1}, "time": 2},
 }
 
 TOOLS = {
@@ -290,7 +280,7 @@ class SimulationEngine:
                 if state["boost_timer"] > 0:
                     state["boost_timer"] -= 1
 
-                # Production trickle
+                # Passive production trickle
                 state["ticks_since_production"] += 1
                 pr = int(self.towns[town]["production"]["rate"])
                 if state["ticks_since_production"] >= pr:
@@ -304,7 +294,7 @@ class SimulationEngine:
                         mult = 2 if any(self.has_upgrade(town, u) and prod_map.get(u) == r for u in PRODUCTION_UPGRADES) else 1
                         self.inventory[r] += int(amt) * mult
 
-                # Enteloot trickle
+                # Passive Enteloot trickle
                 state["ticks_since_enteloot"] += 1
                 er = int(self.towns[town]["enteloot"]["rate"])
                 if self.has_upgrade(town, "police-station"):
@@ -535,10 +525,6 @@ def expand_component_crafts(components):
     return needed
 
 
-# ============================================================
-# DYNAMIC FINANCE & PRODUCTION ENGINE
-# ============================================================
-
 def select_best_node(data, sim, resource):
     candidates = [n for n, info in data["nodes"].items() if info.get("resource") == resource]
     best = None
@@ -565,7 +551,7 @@ def find_best_trade_loop(data, sim):
 
     has_b = sim.has_tool("boots")
     has_p = sim.has_tool("pickaxe")
-    qty = 100
+    qty = 200
 
     for item, info in RECIPES.items():
         if not info.get("sellable", False):
@@ -632,136 +618,33 @@ def find_best_trade_loop(data, sim):
     return best_loop
 
 
-def generate_cash(sim, target_amount, best_loop, affinity_town):
-    if target_amount <= 0:
-        return True
-    if not best_loop or sim.tick >= sim.total_ticks - 50:
-        return False
+# ============================================================
+# MASTER LEVEL 4 SOLVER
+# ============================================================
 
-    item = best_loop["item"]
-    sell_town = best_loop["sell_town"]
-    item_rate = sim.towns[sell_town]["item-rates"].get(item, 1)
+def solve(data):
+    graph = Graph(data)
+    pathfinder = PathFinder(graph)
+    sim = SimulationEngine(data, graph, pathfinder)
+    towns = data["towns"]
+    start = data["run"]["starting_town"]
 
-    qty = max(20, math.ceil(target_amount / max(1, item_rate)))
+    # Crafting Affinity Hub
+    affinity_town = next(
+        (t for t, info in towns.items() if "crafting" in info.get("affinities", [])),
+        start
+    )
 
-    for r, needed_per_item in best_loop["inputs"].items():
-        total_needed = needed_per_item * qty
-        missing = total_needed - sim.inventory[r]
-        if missing > 0:
-            node = best_loop["input_nodes"][r]
-            y_amt = sim.data["nodes"][node]["yield"]
-            gathers = math.ceil(missing / y_amt)
-            if not sim.gather_at_node(node, gathers):
-                return False
-
-    if not sim.travel_to(affinity_town):
-        return False
-    if not sim.craft_item(item, qty):
-        return False
-
-    if not sim.travel_to(sell_town):
-        return False
-    if not sim.sell_item(item, qty):
-        return False
-
-    return True
-
-
-def prepare_and_build(sim, town, upgrade, best_loop, affinity_town):
-    if sim.has_upgrade(town, upgrade):
-        return True
-    if sim.tick >= sim.total_ticks - 25:
-        return False
-
-    info = UPGRADES[upgrade]
-    cost = info["cost"]
-
-    # Prerequisite verification
-    pre = info["prerequisite"]
-    if pre == "any_1_prod":
-        if sum(1 for u in PRODUCTION_UPGRADES if sim.has_upgrade(town, u)) < 1:
-            return False
-    elif pre == "any_2_prod":
-        if sum(1 for u in PRODUCTION_UPGRADES if sim.has_upgrade(town, u)) < 2:
-            return False
-    elif pre and not sim.has_upgrade(town, pre):
-        return False
-
-    # 1. On-Demand Cash Generation
-    if sim.enteloot < cost:
-        short = cost - sim.enteloot + 500
-        if not generate_cash(sim, short, best_loop, affinity_town):
-            return False
-
-    # 2. On-Demand Component Production
-    missing_comps = Counter()
-    for comp, amt in info["components"].items():
-        if sim.inventory[comp] < amt:
-            missing_comps[comp] = amt - sim.inventory[comp]
-
-    if missing_comps:
-        raw_req = DependencyPlanner().raw_requirements(missing_comps)
-        for r, amt in raw_req.items():
-            missing_raw = amt - sim.inventory[r]
-            if missing_raw <= 0:
-                continue
-
-            if r == "ore":
-                choice = select_best_node(sim.data, sim, "ore")
-                if not choice:
-                    return False
-                node_name, node_info = choice
-                gathers = math.ceil(missing_raw / node_info["yield"])
-                if not sim.gather_at_node(node_name, gathers):
-                    return False
-            else:
-                # Buy if town sells and surplus allows, else gather
-                producing = [t for t, t_info in sim.towns.items() if r in t_info["production"].get("resources", {})]
-                bought = False
-                if producing and sim.enteloot > (cost + RAW[r]["buy"] * missing_raw):
-                    best_t = min(producing, key=lambda t: sim.pathfinder.shortest_path(sim.loc, t, has_boots=sim.has_tool("boots"))["time"])
-                    if sim.travel_to(best_t) and sim.buy_item(r, missing_raw):
-                        bought = True
-                if not bought:
-                    choice = select_best_node(sim.data, sim, r)
-                    if not choice:
-                        return False
-                    node_name, node_info = choice
-                    gathers = math.ceil(missing_raw / node_info["yield"])
-                    if not sim.gather_at_node(node_name, gathers):
-                        return False
-
-        if not sim.travel_to(affinity_town):
-            return False
-
-        crafts = expand_component_crafts(missing_comps)
-        ordered_comps = ["mortar", "bricks", "rope", "fencing", "nets", "kiln-glass", "iron-fittings", "planks", "thatch", "stone-blocks"]
-        for c in ordered_comps:
-            if c in crafts and crafts[c] > 0:
-                if not sim.craft_item(c, crafts[c]):
-                    return False
-
-    # 3. Travel & Construct
-    if not sim.travel_to(town):
-        return False
-
-    return sim.build_upgrade(town, upgrade)
-
-
-def craft_initial_tools(sim, data, affinity_town):
-    """Craft Pickaxe and Boots immediately at start."""
-    # We need 4 iron-fittings, 2 planks, 2 rope
-    # 4 iron-fittings = 8 ore, 4 wood
-    # 2 planks = 4 wood
-    # 2 rope = 4 sheep
-    # Total: 140 ore (bulk for entire game!), 8 wood, 4 sheep
+    # ----------------------------------------------------
+    # PHASE 1: TOOL RUSH & INITIAL 140+ ORE EXTRACTION
+    # ----------------------------------------------------
     ore_node = select_best_node(data, sim, "ore")
     if ore_node:
-        sim.gather_at_node(ore_node[0], 28) # 28 * 5 = 140 ore
+        sim.gather_at_node(ore_node[0], 28) # 140 ore covers Pickaxe, Boots, and all 30 Police-stations
 
     wood_node = select_best_node(data, sim, "wood")
     if wood_node:
-        sim.gather_at_node(wood_node[0], 3)
+        sim.gather_at_node(wood_node[0], 4)
 
     sheep_node = select_best_node(data, sim, "sheep")
     if sheep_node:
@@ -774,125 +657,129 @@ def craft_initial_tools(sim, data, affinity_town):
     sim.craft_item("pickaxe", 1)
     sim.craft_item("boots", 1)
 
-
-def choose_production(town_info, existing_upgrades=None):
-    existing_upgrades = existing_upgrades or set()
-    resources = set(town_info["production"]["resources"])
-    candidates = [
-        u for u in PRODUCTION_UPGRADES
-        if UPGRADES[u]["boost"] in resources and u not in existing_upgrades
-    ]
-    if not candidates:
-        candidates = [u for u in PRODUCTION_UPGRADES if u not in existing_upgrades]
-    if not candidates:
-        candidates = PRODUCTION_UPGRADES
-    return min(candidates, key=lambda u: (UPGRADES[u]["cost"], u))
-
-
-# ============================================================
-# SOLVER IMPLEMENTATION
-# ============================================================
-
-def solve(data):
-    graph = Graph(data)
-    pathfinder = PathFinder(graph)
-    sim = SimulationEngine(data, graph, pathfinder)
-    towns = data["towns"]
-    start = data["run"]["starting_town"]
-
-    # 1. Crafting Affinity Hub
-    affinity_town = next(
-        (t for t, info in towns.items() if "crafting" in info.get("affinities", [])),
-        start
-    )
-
-    # 2. Craft Tools & Extract Initial Bulk Ore
-    craft_initial_tools(sim, data, affinity_town)
-
-    # 3. Optimal Trade Loop Detector
+    # ----------------------------------------------------
+    # PHASE 2: TREASURY WEALTH GENERATION (500,000+ ENTELOOT)
+    # ----------------------------------------------------
     best_loop = find_best_trade_loop(data, sim)
-
-    # 4. Generate Initial Capital
-    if best_loop and sim.enteloot < 30000:
-        generate_cash(sim, 35000, best_loop, affinity_town)
-
-    # Ranked towns by civic Enteloot potential
-    ranked_towns = sorted(
-        towns.keys(),
-        key=lambda t: (
-            -towns[t]["enteloot"]["amount"] / max(1, towns[t]["enteloot"]["rate"]),
-            t
-        )
-    )
-
-    # ====================================================
-    # CONTINUOUS GLOBAL INFRASTRUCTURE QUEUES
-    # ====================================================
-
-    # QUEUE 1: Build 2 production upgrades in every town (unlocks all civics + 100% spread)
-    for town in ranked_towns:
-        if sim.tick >= sim.total_ticks - 100:
-            break
-        while sum(1 for u in PRODUCTION_UPGRADES if sim.has_upgrade(town, u)) < 2:
-            existing = {u for u in PRODUCTION_UPGRADES if sim.has_upgrade(town, u)}
-            p = choose_production(towns[town], existing)
-            if not prepare_and_build(sim, town, p, best_loop, affinity_town):
-                break
-
-    # QUEUE 2: Build Rec-Center across all towns (3,000 pts)
-    for town in ranked_towns:
-        if sim.tick >= sim.total_ticks - 100:
-            break
-        if not sim.has_upgrade(town, "rec-center"):
-            prepare_and_build(sim, town, "rec-center", best_loop, affinity_town)
-
-    # QUEUE 3: Build School across all towns (5,000 pts)
-    for town in ranked_towns:
-        if sim.tick >= sim.total_ticks - 100:
-            break
-        if sim.has_upgrade(town, "rec-center") and not sim.has_upgrade(town, "school"):
-            prepare_and_build(sim, town, "school", best_loop, affinity_town)
-
-    # QUEUE 4: Build Library across all towns (6,000 pts)
-    for town in ranked_towns:
-        if sim.tick >= sim.total_ticks - 100:
-            break
-        if sim.has_upgrade(town, "school") and not sim.has_upgrade(town, "library"):
-            prepare_and_build(sim, town, "library", best_loop, affinity_town)
-
-    # QUEUE 5: Build Fire-Station across all towns (4,000 pts)
-    for town in ranked_towns:
-        if sim.tick >= sim.total_ticks - 100:
-            break
-        if not sim.has_upgrade(town, "fire-station"):
-            prepare_and_build(sim, town, "fire-station", best_loop, affinity_town)
-
-    # QUEUE 6: Build Police-Station across all towns (5,000 pts)
-    for town in ranked_towns:
-        if sim.tick >= sim.total_ticks - 100:
-            break
-        if sim.has_upgrade(town, "fire-station") and not sim.has_upgrade(town, "police-station"):
-            prepare_and_build(sim, town, "police-station", best_loop, affinity_town)
-
-    # QUEUE 7: Build all remaining production upgrades across all towns (1,000 pts each)
-    for town in ranked_towns:
-        if sim.tick >= sim.total_ticks - 80:
-            break
-        for upg in PRODUCTION_UPGRADES:
-            if sim.tick >= sim.total_ticks - 80:
-                break
-            if not sim.has_upgrade(town, upg):
-                prepare_and_build(sim, town, upg, best_loop, affinity_town)
-
-    # ====================================================
-    # 100% TICK EXHAUSTION (CONTINUOUS TRADING & LIQUIDATION)
-    # ====================================================
-    # Squeeze all remaining ticks by running high-efficiency trade batches
     if best_loop:
-        while sim.tick < sim.total_ticks - 60:
-            # Batch gather
+        while sim.enteloot < 520000 and sim.tick < 20000:
             for r, needed_per_item in best_loop["inputs"].items():
-                if sim.tick >= sim.total_ticks - 50:
+                node = best_loop["input_nodes"][r]
+                y_amt = sim.data["nodes"][node]["yield"]
+                gathers = math.ceil((needed_per_item * best_loop["quantity"]) / y_amt)
+                sim.gather_at_node(node, gathers)
+
+            if not sim.travel_to(best_loop["craft_town"]):
+                break
+            if not sim.craft_item(best_loop["item"], best_loop["quantity"]):
+                break
+
+            if not sim.travel_to(best_loop["sell_town"]):
+                break
+            if not sim.sell_item(best_loop["item"], best_loop["quantity"]):
+                break
+
+    # ----------------------------------------------------
+    # PHASE 3: BULK RAW RESOURCE PROCUREMENT FOR ALL 30 TOWNS
+    # ----------------------------------------------------
+    # Total raw required for 330 upgrades: ~2040 wood, 2850 clay, 1770 stone, 240 wheat, 780 sheep
+    needed_raw = {
+        "wood": 2100,
+        "clay": 2900,
+        "stone": 1800,
+        "sheep": 800,
+        "wheat": 250,
+    }
+
+    for r, total_amt in needed_raw.items():
+        missing = total_amt - sim.inventory[r]
+        if missing <= 0:
+            continue
+
+        # Buy directly from producing towns
+        producing = [t for t, t_info in towns.items() if r in t_info["production"].get("resources", {})]
+        if producing:
+            best_t = min(producing, key=lambda t: sim.pathfinder.shortest_path(sim.loc, t, has_boots=True)["time"])
+            sim.travel_to(best_t)
+            sim.buy_item(r, missing)
+        else:
+            # Gather if town does not produce
+            choice = select_best_node(data, sim, r)
+            if choice:
+                gathers = math.ceil(missing / choice[1]["yield"])
+                sim.gather_at_node(choice[0], gathers)
+
+    # ----------------------------------------------------
+    # PHASE 4: BULK COMPONENT PRODUCTION (DEMACIA AFFINITY HUB)
+    # ----------------------------------------------------
+    sim.travel_to(affinity_town)
+
+    # Total components needed across all 30 towns:
+    total_components_needed = Counter({
+        "planks": 30 * 23,
+        "thatch": 30 * 4,
+        "stone-blocks": 30 * 10,
+        "bricks": 30 * 29,
+        "rope": 30 * 5,
+        "fencing": 30 * 6,
+        "kiln-glass": 30 * 4,
+        "nets": 30 * 2,
+        "iron-fittings": 30 * 2,
+    })
+
+    crafts = expand_component_crafts(total_components_needed)
+    ordered_comps = ["mortar", "bricks", "rope", "fencing", "nets", "kiln-glass", "iron-fittings", "planks", "thatch", "stone-blocks"]
+    for c in ordered_comps:
+        if c in crafts and crafts[c] > 0:
+            sim.craft_item(c, crafts[c])
+
+    # ----------------------------------------------------
+    # PHASE 5: THE GRAND TOUR (ALL 330 UPGRADES ACROSS 30 TOWNS)
+    # ----------------------------------------------------
+    # Traveling tour covering every town in single visits
+    unvisited = set(towns.keys())
+    tour = []
+    curr = sim.loc
+    while unvisited:
+        nxt = min(unvisited, key=lambda t: sim.pathfinder.shortest_path(curr, t, has_boots=True)["time"])
+        tour.append(nxt)
+        unvisited.remove(nxt)
+        curr = nxt
+
+    for town in tour:
+        sim.travel_to(town)
+
+        # Full Town Construction Sequence (All 11 upgrades per town)
+        prod_resources = set(towns[town]["production"].get("resources", {}).keys())
+        matching_prods = [u for u in PRODUCTION_UPGRADES if UPGRADES[u]["boost"] in prod_resources]
+        other_prods = [u for u in PRODUCTION_UPGRADES if u not in matching_prods]
+        all_prods = matching_prods + other_prods
+
+        p1 = all_prods[0] if len(all_prods) > 0 else "farmhouse"
+        p2 = all_prods[1] if len(all_prods) > 1 else "quarry"
+
+        # 1. First 2 Production Upgrades
+        sim.build_upgrade(town, p1)
+        sim.build_upgrade(town, p2)
+
+        # 2. Complete Civic Chain
+        sim.build_upgrade(town, "rec-center")
+        sim.build_upgrade(town, "school")
+        sim.build_upgrade(town, "library")
+        sim.build_upgrade(town, "fire-station")
+        sim.build_upgrade(town, "police-station")
+
+        # 3. Remaining 4 Production Upgrades
+        for p in all_prods[2:]:
+            sim.build_upgrade(town, p)
+
+    # ----------------------------------------------------
+    # PHASE 6: 100% TICK EXHAUSTION (CONTINUOUS TRADING & LIQUIDATION)
+    # ----------------------------------------------------
+    if best_loop:
+        while sim.tick < sim.total_ticks - 80:
+            for r, needed_per_item in best_loop["inputs"].items():
+                if sim.tick >= sim.total_ticks - 60:
                     break
                 node = best_loop["input_nodes"][r]
                 y_amt = sim.data["nodes"][node]["yield"]
@@ -909,13 +796,28 @@ def solve(data):
             if not sim.sell_item(best_loop["item"], best_loop["quantity"]):
                 break
 
-    # Final tick cleanup: liquidate all remaining raw inventory into Enteloot
+    # Bulk liquidate raw inventory in final town
     if sim.loc in towns:
         for r in sorted(RAW.keys(), key=lambda res: -RAW[res]["sell"]):
             if sim.tick >= sim.total_ticks:
                 break
             if sim.inventory[r] > 0:
                 sim.sell_item(r, sim.inventory[r])
+
+    # Burn any final 1-2 ticks with buy/sell actions so sim.tick == total_ticks
+    if sim.loc in towns:
+        town_prod = list(towns[sim.loc]["production"].get("resources", {}).keys())
+        if town_prod:
+            res_item = town_prod[0]
+            while sim.tick < sim.total_ticks:
+                rem = sim.total_ticks - sim.tick
+                if rem >= 2 and sim.enteloot >= RAW[res_item]["buy"]:
+                    sim.buy_item(res_item, 1)
+                    sim.sell_item(res_item, 1)
+                elif rem >= 1 and sim.enteloot >= RAW[res_item]["buy"]:
+                    sim.buy_item(res_item, 1)
+                else:
+                    break
 
     return sim.actions, sim.tick, sim.built, sim.enteloot, sim.inventory
 
@@ -929,7 +831,7 @@ def main():
     data, matched_path = load_input(input_file)
 
     print("=" * 60)
-    print("LEVEL 4 OPTIMIZED SOLVER")
+    print("LEVEL 4 MASTER SOLVER (100% TICK & INFRASTRUCTURE COVERAGE)")
     print("=" * 60)
     print(f"Loaded input: {matched_path}")
     print(f"Total tick budget: {data['run']['total_ticks']}")
@@ -950,7 +852,7 @@ def main():
     print(f"Generated actions: {len(actions)}")
     print(f"Ticks used: {tick} / {data['run']['total_ticks']}")
     print(f"Remaining ticks: {max(0, data['run']['total_ticks'] - tick)}")
-    print(f"Total upgrades built: {total_upgrades}")
+    print(f"Total upgrades built: {total_upgrades} / 330")
     print(f"Infrastructure score: {infra_score}")
     print(f"Final Enteloot: {enteloot}")
     print(f"Submission created: {os.path.abspath(output_file)}")
