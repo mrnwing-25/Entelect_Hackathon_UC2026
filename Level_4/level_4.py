@@ -43,6 +43,16 @@ COMPONENTS = {
     "kiln-glass": {"inputs": {"clay": 2, "wood": 2}, "time": 2},
     "nets": {"inputs": {"rope": 1, "fencing": 1}, "time": 2},
     "iron-fittings": {"inputs": {"ore": 2, "wood": 1}, "time": 2},
+    "planks": {"inputs": {"wood": 2}, "time": 2},
+    "thatch": {"inputs": {"wheat": 2}, "time": 2},
+    "stone-blocks": {"inputs": {"stone": 3}, "time": 2},
+    "mortar": {"inputs": {"clay": 1, "stone": 1}, "time": 2},
+    "bricks": {"inputs": {"clay": 2, "mortar": 1}, "time": 2},
+    "rope": {"inputs": {"sheep": 2}, "time": 2},
+    "fencing": {"inputs": {"wood": 2, "rope": 1}, "time": 2},
+    "kiln-glass": {"inputs": {"clay": 2, "wood": 2}, "time": 2},
+    "nets": {"inputs": {"rope": 1, "fencing": 1}, "time": 2},
+    "iron-fittings": {"inputs": {"ore": 2, "wood": 1}, "time": 2},
 }
 
 TOOLS = {
