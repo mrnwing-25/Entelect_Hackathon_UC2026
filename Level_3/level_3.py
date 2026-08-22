@@ -873,26 +873,64 @@ class Economy:
 # NODE ANALYSIS
 # ============================================================
 
+# ============================================================
+# NODE ANALYSIS
+# ============================================================
+
 class NodeManager:
 
-    def __init__(self, data):
-
+    def __init__(
+        self,
+        data,
+        pathfinder
+    ):
+        self.data = data
         self.nodes = data["nodes"]
+        self.pathfinder = pathfinder
 
     def nodes_for_resource(self, resource):
-
         result = []
 
         for node, info in self.nodes.items():
 
-            if info["resource"] == resource:
+            if info.get("resource") == resource:
                 result.append(node)
 
         return result
 
-    def best_resource_node(self, resource, current_location):
+    def get_distance(
+        self,
+        start,
+        end
+    ):
         """
-        Select the resource node with the best economic efficiency.
+        Return the shortest standard-route travel time
+        between two locations.
+
+        Boots are deliberately not assumed here because
+        this method is used for general node ranking.
+        """
+
+        path = self.pathfinder.shortest_path(
+            start,
+            end,
+            boots=False,
+            allow_fast=False,
+        )
+
+        if path is None:
+            return float("inf")
+
+        return path["time"]
+
+    def best_resource_node(
+        self,
+        resource,
+        current_location
+    ):
+        """
+        Select the resource node with the best economic
+        efficiency.
 
         Score:
 
@@ -900,37 +938,48 @@ class NodeManager:
             -------------------------------
             travel time + gather time
 
-        This prevents the strategy from choosing a
-        high-yield node that is extremely far away.
+        A higher score is better.
         """
 
         best_node = None
         best_score = float("-inf")
 
-        for node_name, node in self.data["nodes"].items():
+        for node_name, node in self.nodes.items():
 
             if node.get("resource") != resource:
                 continue
 
-            yield_amount = node.get("yield", 0)
-            gather_time = node.get("gather-time", 999999)
+            yield_amount = int(
+                node.get("yield", 0)
+            )
 
-            try:
-                travel_time = self.get_distance(
-                    current_location,
-                    node_name
-                )
-            except Exception:
+            gather_time = int(
+                node.get("gather-time", 999999)
+            )
+
+            travel_time = self.get_distance(
+                current_location,
+                node_name
+            )
+
+            if math.isinf(travel_time):
                 continue
 
-            total_time = travel_time + gather_time
+            total_time = (
+                travel_time
+                + gather_time
+            )
 
             if total_time <= 0:
                 continue
 
-            score = yield_amount / total_time
+            score = (
+                yield_amount
+                / total_time
+            )
 
             if score > best_score:
+
                 best_score = score
                 best_node = node_name
 
@@ -941,86 +990,8 @@ class NodeManager:
         return [
             node
             for node, info in self.nodes.items()
-            if info["resource"] == "ore"
+            if info.get("resource") == "ore"
         ]
-
-
-# ============================================================
-# RECIPE DEPENDENCY ENGINE
-# ============================================================
-
-class DependencyPlanner:
-
-    def __init__(self):
-        self.components = COMPONENTS
-
-    def expand(
-        self,
-        item,
-        quantity,
-        result=None
-    ):
-        """
-        Recursively expand a component recipe into
-        raw resources.
-
-        Example:
-
-            bricks
-              -> clay
-              -> mortar
-                   -> clay
-                   -> stone
-        """
-
-        if result is None:
-            result = Counter()
-
-        quantity = int(quantity)
-
-        if item not in self.components:
-
-            result[item] += quantity
-
-            return result
-
-        recipe = self.components[item]
-
-        for ingredient, amount in (
-            recipe["inputs"].items()
-        ):
-
-            self.expand(
-                ingredient,
-                amount * quantity,
-                result
-            )
-
-        return result
-
-    def raw_requirements(
-        self,
-        requirements
-    ):
-        """
-        Convert component requirements into
-        total raw resource requirements.
-        """
-
-        result = Counter()
-
-        for item, quantity in (
-            requirements.items()
-        ):
-
-            expanded = self.expand(
-                item,
-                quantity
-            )
-
-            result.update(expanded)
-
-        return result
 
 
 # ============================================================
@@ -1030,19 +1001,22 @@ class DependencyPlanner:
 class ResourcePlanner:
 
     def __init__(
-        self,
-        data,
-        graph,
-        pathfinder,
-        state,
-    ):
+            self,
+            data,
+            graph,
+            pathfinder,
+            state,
+        ):
 
-        self.data = data
-        self.graph = graph
-        self.pathfinder = pathfinder
-        self.state = state
+            self.data = data
+            self.graph = graph
+            self.pathfinder = pathfinder
+            self.state = state
 
-        self.node_manager = NodeManager(data)
+            self.node_manager = NodeManager(
+                data,
+                pathfinder
+            )
 
     def nearest_node(
         self,
@@ -1258,9 +1232,21 @@ class CraftingPlanner:
         self.actions = actions
 
     def craft_time(self, town):
-        affinities = (
-            self.data["towns"][town]
-            .get("affinities", [])
+        """
+        Return crafting time for the current location.
+
+        Nodes are not towns, so if the player is standing
+        at a resource node, use the normal crafting time.
+        """
+
+        town_data = self.data["towns"].get(town)
+
+        if town_data is None:
+            return 2
+
+        affinities = town_data.get(
+            "affinities",
+            []
         )
 
         if "crafting" in affinities:
@@ -1684,7 +1670,77 @@ class UpgradeManager:
         )
 
         return True
+# ============================================================
+# RECIPE DEPENDENCY ENGINE
+# ============================================================
 
+class DependencyPlanner:
+
+    def __init__(self):
+        self.components = COMPONENTS
+
+    def expand(
+        self,
+        item,
+        quantity,
+        result=None
+    ):
+        """
+        Recursively expand a component recipe into
+        raw resources.
+
+        Example:
+
+            bricks
+              -> clay
+              -> mortar
+                   -> clay
+                   -> stone
+        """
+
+        if result is None:
+            result = Counter()
+
+        quantity = int(quantity)
+
+        # Raw resource
+        if item not in self.components:
+            result[item] += quantity
+            return result
+
+        recipe = self.components[item]
+
+        for ingredient, amount in recipe["inputs"].items():
+
+            self.expand(
+                ingredient,
+                amount * quantity,
+                result
+            )
+
+        return result
+
+    def raw_requirements(
+        self,
+        requirements
+    ):
+        """
+        Convert component requirements into
+        total raw resource requirements.
+        """
+
+        result = Counter()
+
+        for item, quantity in requirements.items():
+
+            expanded = self.expand(
+                item,
+                quantity
+            )
+
+            result.update(expanded)
+
+        return result
 
 # ============================================================
 # TOOL MANAGER
@@ -1811,8 +1867,47 @@ class Level3Strategy:
             self.graph
         )
 
+        self.node_manager = NodeManager(
+            data,
+            self.pathfinder
+        )
+
         self.state = PlannerState(
             data
+        )
+
+        self.actions = ActionBuilder()
+
+        self.economy = Economy(
+            data
+        )
+
+        self.crafting = CraftingPlanner(
+            data,
+            self.state,
+            self.actions
+        )
+
+        self.resource_planner = (
+            ResourcePlanner(
+                data,
+                self.graph,
+                self.pathfinder,
+                self.state
+            )
+        )
+
+        self.upgrades = UpgradeManager(
+            data,
+            self.state,
+            self.actions,
+            self.crafting
+        )
+
+        self.tools = ToolManager(
+            self.state,
+            self.actions,
+            self.crafting
         )
 
         self.actions = ActionBuilder()
@@ -2002,17 +2097,76 @@ class Level3Strategy:
     # --------------------------------------------------------
 
     def produce_component_tree(
-        self,
-        requirements
-    ):
+    self,
+    requirements
+):
         """
         Produce all components in dependency order.
 
-        This method is deliberately written so that a list
-        cannot accidentally be treated like a dictionary.
+        Components can only be crafted at towns.
+
+        If the strategy is currently at a resource node,
+        return to the nearest town with crafting affinity
+        before crafting.
         """
 
-        # Components with deeper dependencies first.
+        # --------------------------------------------------------
+        # Make sure we are at a town
+        # --------------------------------------------------------
+
+        if self.state.location not in self.data["towns"]:
+
+            crafting_towns = [
+                town_name
+                for town_name, town_info
+                in self.data["towns"].items()
+                if "crafting"
+                in town_info.get(
+                    "affinities",
+                    []
+                )
+            ]
+
+            if not crafting_towns:
+                return False
+
+            best_town = None
+            best_path = None
+
+            for town in crafting_towns:
+
+                path = self.pathfinder.shortest_path(
+                    self.state.location,
+                    town,
+                    boots=self.state.has_tool(
+                        "boots"
+                    ),
+                    allow_fast=False,
+                )
+
+                if path is None:
+                    continue
+
+                if (
+                    best_path is None
+                    or path["time"] < best_path["time"]
+                ):
+                    best_town = town
+                    best_path = path
+
+            if best_town is None:
+                return False
+
+            if not self.resource_planner.move_using_path(
+                best_path,
+                self.actions
+            ):
+                return False
+
+        # --------------------------------------------------------
+        # Components with deeper dependencies first
+        # --------------------------------------------------------
+
         ordered = [
             "mortar",
             "bricks",
@@ -2029,6 +2183,10 @@ class Level3Strategy:
         remaining = Counter(
             requirements
         )
+
+        # --------------------------------------------------------
+        # Craft components
+        # --------------------------------------------------------
 
         for component in ordered:
 
@@ -2148,6 +2306,71 @@ class Level3Strategy:
         )
 
         return towns
+        
+    def travel_to_crafting_town(self):
+        """
+        Move to the nearest town with crafting affinity.
+
+        This method is safe when the current location is a
+        resource node such as N19 or N21.
+        """
+
+        current = self.state.location
+
+        # Already in a crafting town.
+        if current in self.data["towns"]:
+
+            affinities = (
+                self.data["towns"][current]
+                .get("affinities", [])
+            )
+
+            if "crafting" in affinities:
+                return True
+
+        crafting_towns = [
+            town
+            for town, info in self.data["towns"].items()
+            if "crafting" in info.get(
+                "affinities",
+                []
+            )
+        ]
+
+        if not crafting_towns:
+            return False
+
+        best_town = None
+        best_path = None
+
+        boots = self.state.has_tool("boots")
+
+        for town in crafting_towns:
+
+            path = self.pathfinder.shortest_path(
+                current,
+                town,
+                boots=boots,
+                allow_fast=False
+            )
+
+            if path is None:
+                continue
+
+            if (
+                best_path is None
+                or path["time"] < best_path["time"]
+            ):
+                best_town = town
+                best_path = path
+
+        if best_town is None:
+            return False
+
+        return self.resource_planner.move_using_path(
+            best_path,
+            self.actions
+        )
 
     # --------------------------------------------------------
     # TOOLS
@@ -2184,10 +2407,21 @@ class Level3Strategy:
     # --------------------------------------------------------
 
     def prepare_upgrade(
-        self,
-        town,
-        upgrade
-    ):
+    self,
+    town,
+    upgrade
+):
+        """
+        Gather and craft everything required for an upgrade.
+
+        Resource nodes and towns are different location types.
+        Therefore we always move to a crafting town before
+        crafting components.
+        """
+
+        if upgrade not in UPGRADES:
+            return False
+
         info = UPGRADES[upgrade]
 
         required_components = Counter(
@@ -2196,26 +2430,25 @@ class Level3Strategy:
 
         missing_components = Counter()
 
-        for component, amount in (
-            required_components.items()
-        ):
+        for component, amount in required_components.items():
 
-            current = (
-                self.state.inventory[
-                    component
-                ]
-            )
+            current = self.state.inventory[component]
 
             if current < amount:
-
-                missing_components[
-                    component
-                ] = (
+                missing_components[component] = (
                     amount - current
                 )
 
+        # --------------------------------------------------------
+        # Nothing needs to be crafted.
+        # --------------------------------------------------------
+
         if not missing_components:
             return True
+
+        # --------------------------------------------------------
+        # Determine raw resources required.
+        # --------------------------------------------------------
 
         raw_requirements = (
             DependencyPlanner()
@@ -2224,62 +2457,31 @@ class Level3Strategy:
             )
         )
 
+        # --------------------------------------------------------
+        # Gather raw resources.
+        #
+        # This may move us to resource nodes such as N19,
+        # N21, etc.
+        # --------------------------------------------------------
+
         if not self.obtain_resources(
             raw_requirements
         ):
             return False
 
-        # If the current town does not have crafting
-        # affinity, travel to the nearest crafting town.
-        if "crafting" not in (
-            self.data["towns"][
-                self.state.location
-            ].get("affinities", [])
-        ):
+        # --------------------------------------------------------
+        # Return to a crafting town.
+        #
+        # IMPORTANT:
+        # self.state.location may currently be a node.
+        # --------------------------------------------------------
 
-            crafting_towns = [
-                town_name
-                for town_name, town_info
-                in self.data["towns"].items()
-                if "crafting"
-                in town_info.get(
-                    "affinities",
-                    []
-                )
-            ]
+        if not self.travel_to_crafting_town():
+            return False
 
-            if crafting_towns:
-
-                best = min(
-                    crafting_towns,
-                    key=lambda name:
-                        self.pathfinder
-                        .shortest_path(
-                            self.state.location,
-                            name,
-                            boots=self.state.has_tool(
-                                "boots"
-                            ),
-                            allow_fast=False
-                        )["time"]
-                        if self.pathfinder
-                        .shortest_path(
-                            self.state.location,
-                            name,
-                            boots=self.state.has_tool(
-                                "boots"
-                            ),
-                            allow_fast=False
-                        )
-                        is not None
-                        else float("inf")
-                )
-
-                if not self.travel_to(
-                    best,
-                    prefer_fast=False
-                ):
-                    return False
+        # --------------------------------------------------------
+        # Craft the required components.
+        # --------------------------------------------------------
 
         if not self.produce_component_tree(
             missing_components
@@ -2592,7 +2794,8 @@ class Level3Strategy:
         # ====================================================
 
         ore_node = self.node_manager.best_resource_node(
-            "ore"
+            "ore",
+            self.state.location
         )
 
         if ore_node is not None:
@@ -2624,7 +2827,7 @@ class Level3Strategy:
                     < ore_target
                 ):
 
-                    gather_time = (
+                    gather_time = int(
                         node_info["gather-time"]
                     )
 
