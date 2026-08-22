@@ -2,19 +2,10 @@ import json
 import math
 import heapq
 import sys
+import os
 
-# Global Static Recipe Inputs & Crafting Data
+# Global Static Data Definitions
 RECIPES = {
-    # Finished Goods
-    "bread": {"inputs": {"wheat": 3}, "craft_time": 2, "sellable": True},
-    "fish-n-chips": {"inputs": {"fish": 2, "wheat": 1}, "craft_time": 2, "sellable": True},
-    "stew": {"inputs": {"sheep": 1, "fish": 1, "wheat": 1}, "craft_time": 2, "sellable": True},
-    "wooden-crafts": {"inputs": {"wood": 4}, "craft_time": 2, "sellable": True},
-    "furniture": {"inputs": {"wood": 3, "sheep": 1}, "craft_time": 2, "sellable": True},
-    "stone-works": {"inputs": {"stone": 5}, "craft_time": 2, "sellable": True},
-    "roof-tiles": {"inputs": {"clay": 3, "stone": 2}, "craft_time": 2, "sellable": True},
-    "wool-garments": {"inputs": {"sheep": 3}, "craft_time": 2, "sellable": True},
-    "pottery": {"inputs": {"clay": 4, "wood": 1}, "craft_time": 2, "sellable": True},
     # Construction Components
     "planks": {"inputs": {"wood": 2}, "craft_time": 2, "sellable": False},
     "thatch": {"inputs": {"wheat": 2}, "craft_time": 2, "sellable": False},
@@ -28,26 +19,19 @@ RECIPES = {
 }
 
 UPGRADES = {
-    "farmhouse": {"boosts": "sheep", "components": {"planks": 3, "thatch": 2}, "enteloot_cost": 500, "build_time": 3, "prerequisite": None, "type": "production"},
-    "pier": {"boosts": "fish", "components": {"planks": 4, "nets": 2}, "enteloot_cost": 600, "build_time": 3, "prerequisite": None, "type": "production"},
-    "fertilised-fields": {"boosts": "wheat", "components": {"fencing": 2, "thatch": 2}, "enteloot_cost": 500, "build_time": 3, "prerequisite": None, "type": "production"},
-    "quarry": {"boosts": "stone", "components": {"stone-blocks": 3, "planks": 2}, "enteloot_cost": 600, "build_time": 3, "prerequisite": None, "type": "production"},
-    "woodlands": {"boosts": "wood", "components": {"fencing": 2, "rope": 2}, "enteloot_cost": 500, "build_time": 3, "prerequisite": None, "type": "production"},
-    "pottery-house": {"boosts": "clay", "components": {"bricks": 4, "planks": 2}, "enteloot_cost": 700, "build_time": 3, "prerequisite": None, "type": "production"},
-    "rec-center": {"components": {"planks": 4, "bricks": 3, "rope": 1}, "enteloot_cost": 1200, "build_time": 4, "prerequisite": "any_1_prod", "type": "civic"},
-    "fire-station": {"components": {"bricks": 5, "stone-blocks": 3, "rope": 2}, "enteloot_cost": 1800, "build_time": 4, "prerequisite": "any_2_prod", "type": "civic"},
-    "school": {"components": {"bricks": 6, "planks": 3, "kiln-glass": 2}, "enteloot_cost": 2000, "build_time": 5, "prerequisite": "rec-center", "type": "civic"},
-    "library": {"components": {"bricks": 5, "planks": 5, "kiln-glass": 2}, "enteloot_cost": 2500, "build_time": 5, "prerequisite": "school", "type": "civic"},
+    "farmhouse": {"boosts": "sheep", "components": {"planks": 3, "thatch": 2}, "enteloot_cost": 500, "build_time": 3, "prerequisite": None, "type": "production", "score_value": 1000},
+    "pier": {"boosts": "fish", "components": {"planks": 4, "nets": 2}, "enteloot_cost": 600, "build_time": 3, "prerequisite": None, "type": "production", "score_value": 1000},
+    "fertilised-fields": {"boosts": "wheat", "components": {"fencing": 2, "thatch": 2}, "enteloot_cost": 500, "build_time": 3, "prerequisite": None, "type": "production", "score_value": 1000},
+    "quarry": {"boosts": "stone", "components": {"stone-blocks": 3, "planks": 2}, "enteloot_cost": 600, "build_time": 3, "prerequisite": None, "type": "production", "score_value": 1000},
+    "woodlands": {"boosts": "wood", "components": {"fencing": 2, "rope": 2}, "enteloot_cost": 500, "build_time": 3, "prerequisite": None, "type": "production", "score_value": 1000},
+    "pottery-house": {"boosts": "clay", "components": {"bricks": 4, "planks": 2}, "enteloot_cost": 700, "build_time": 3, "prerequisite": None, "type": "production", "score_value": 1000},
+    "rec-center": {"components": {"planks": 4, "bricks": 3, "rope": 1}, "enteloot_cost": 1200, "build_time": 4, "prerequisite": "any_1_prod", "type": "civic", "score_value": 3000},
+    "fire-station": {"components": {"bricks": 5, "stone-blocks": 3, "rope": 2}, "enteloot_cost": 1800, "build_time": 4, "prerequisite": "any_2_prod", "type": "civic", "score_value": 4000},
+    "school": {"components": {"bricks": 6, "planks": 3, "kiln-glass": 2}, "enteloot_cost": 2000, "build_time": 5, "prerequisite": "rec-center", "type": "civic", "score_value": 5000},
+    "library": {"components": {"bricks": 5, "planks": 5, "kiln-glass": 2}, "enteloot_cost": 2500, "build_time": 5, "prerequisite": "school", "type": "civic", "score_value": 6000},
 }
 
-RAW_RESOURCE_PRICES = {
-    "wheat": {"sell": 2, "buy": 4},
-    "wood": {"sell": 3, "buy": 5},
-    "stone": {"sell": 3, "buy": 5},
-    "clay": {"sell": 4, "buy": 6},
-    "fish": {"sell": 4, "buy": 6},
-    "sheep": {"sell": 5, "buy": 8},
-}
+RAW_RESOURCE_TYPES = {"wheat", "wood", "stone", "clay", "fish", "sheep"}
 
 
 def load_input(filepath):
@@ -73,6 +57,8 @@ def build_graph(data):
 
 
 def get_shortest_path(graph, start, target):
+    if start == target:
+        return 0, [start]
     queue = [(0, start, [start])]
     visited = set()
     while queue:
@@ -90,8 +76,9 @@ def get_shortest_path(graph, start, target):
 
 def compute_raw_requirements(item_name, qty=1):
     reqs = {}
+
     def decompose(name, count):
-        if name in RAW_RESOURCE_PRICES:
+        if name in RAW_RESOURCE_TYPES:
             reqs[name] = reqs.get(name, 0) + count
             return
         if name in RECIPES:
@@ -104,6 +91,7 @@ def compute_raw_requirements(item_name, qty=1):
 
 def get_component_craft_tree(item_name, qty=1):
     tree = []
+
     def build_tree(name, count):
         if name in RECIPES:
             for sub_item, sub_qty in RECIPES[name]["inputs"].items():
@@ -128,6 +116,82 @@ def find_nearest_node_for_resource(graph, current_loc, nodes, resource):
     return best_node, best_cost, best_path
 
 
+def check_prerequisites(upg_name, town, town_built_upgrades):
+    prereq = UPGRADES[upg_name]["prerequisite"]
+    if prereq is None:
+        return True
+    if prereq == "any_1_prod":
+        prod_count = sum(1 for u in town_built_upgrades[town] if UPGRADES[u]["type"] == "production")
+        return prod_count >= 1
+    if prereq == "any_2_prod":
+        prod_count = sum(1 for u in town_built_upgrades[town] if UPGRADES[u]["type"] == "production")
+        return prod_count >= 2
+    return prereq in town_built_upgrades[town]
+
+
+def evaluate_candidate(town, upg_name, current_loc, inventory, enteloot, towns, nodes, graph, affinity_town, town_built_upgrades):
+    upg_data = UPGRADES[upg_name]
+
+    if enteloot < upg_data["enteloot_cost"]:
+        return None
+
+    raw_reqs = {}
+    for comp, count in upg_data["components"].items():
+        comp_raws = compute_raw_requirements(comp, count)
+        for r_res, r_qty in comp_raws.items():
+            raw_reqs[r_res] = raw_reqs.get(r_res, 0) + r_qty
+
+    total_ticks = 0
+    sim_loc = current_loc
+
+    for res, qty_needed in raw_reqs.items():
+        have = inventory.get(res, 0)
+        needed = qty_needed - have
+        if needed <= 0:
+            continue
+
+        node_id, travel_cost, _ = find_nearest_node_for_resource(graph, sim_loc, nodes, res)
+        if not node_id:
+            return None
+
+        node_yield = nodes[node_id]["yield"]
+        g_time = nodes[node_id]["gather-time"]
+        gathers = math.ceil(needed / node_yield)
+
+        total_ticks += travel_cost + (gathers * g_time)
+        sim_loc = node_id
+
+    craft_cost, _ = get_shortest_path(graph, sim_loc, affinity_town)
+    total_ticks += craft_cost
+    sim_loc = affinity_town
+
+    for comp, count in upg_data["components"].items():
+        craft_tree = get_component_craft_tree(comp, count)
+        for _, c_qty in craft_tree:
+            total_ticks += c_qty * 1
+
+    build_travel_cost, _ = get_shortest_path(graph, sim_loc, town)
+    total_ticks += build_travel_cost + upg_data["build_time"]
+
+    if total_ticks == 0:
+        total_ticks = 1
+
+    current_town_upgrades = len(town_built_upgrades[town])
+    spread_weight = 1.0 / (1.0 + current_town_upgrades)
+    
+    score = upg_data["score_value"]
+    roi = (score * (1.0 + spread_weight)) / total_ticks
+
+    return {
+        "town": town,
+        "upg_name": upg_name,
+        "raw_reqs": raw_reqs,
+        "total_ticks": total_ticks,
+        "roi": roi,
+        "enteloot_cost": upg_data["enteloot_cost"]
+    }
+
+
 def solve(data):
     run_config = data["run"]
     total_ticks = run_config["total_ticks"]
@@ -136,10 +200,9 @@ def solve(data):
 
     towns = data["towns"]
     nodes = data["nodes"]
-
     graph = build_graph(data)
-    actions = []
 
+    actions = []
     current_loc = start_town
     current_tick = 0
     inventory = {}
@@ -150,40 +213,41 @@ def solve(data):
             affinity_town = t_name
             break
 
-    target_build_plan = [
-        ("Demacia", "farmhouse"),
-        ("Demacia", "fertilised-fields"),
-        ("Demacia", "rec-center"),
-        ("Demacia", "fire-station"),
-        ("Noxus", "quarry"),
-        ("Noxus", "woodlands"),
-        ("Noxus", "rec-center"),
-        ("Piltover", "pier"),
-        ("Piltover", "pottery-house"),
-        ("Piltover", "rec-center"),
-    ]
-
     town_built_upgrades = {t: set() for t in towns}
 
-    for town, upg_name in target_build_plan:
-        if town not in towns:
-            continue
+    while True:
+        candidates = []
 
+        for town_name in towns:
+            for upg_name in UPGRADES:
+                if upg_name in town_built_upgrades[town_name]:
+                    continue
+                if check_prerequisites(upg_name, town_name, town_built_upgrades):
+                    cand = evaluate_candidate(
+                        town_name, upg_name, current_loc, inventory, enteloot,
+                        towns, nodes, graph, affinity_town, town_built_upgrades
+                    )
+                    if cand and (current_tick + cand["total_ticks"] <= total_ticks):
+                        candidates.append(cand)
+
+        if not candidates:
+            break
+
+        candidates.sort(key=lambda x: x["roi"], reverse=True)
+        best = candidates[0]
+
+        town = best["town"]
+        upg_name = best["upg_name"]
         upg_data = UPGRADES[upg_name]
 
-        raw_reqs = {}
-        for comp, count in upg_data["components"].items():
-            comp_raws = compute_raw_requirements(comp, count)
-            for r_res, r_qty in comp_raws.items():
-                raw_reqs[r_res] = raw_reqs.get(r_res, 0) + r_qty
-
+        raw_reqs = best["raw_reqs"]
         for res, needed_qty in raw_reqs.items():
             have = inventory.get(res, 0)
             still_needed = needed_qty - have
             if still_needed <= 0:
                 continue
 
-            target_node, travel_cost, path = find_nearest_node_for_resource(graph, current_loc, nodes, res)
+            target_node, _, path = find_nearest_node_for_resource(graph, current_loc, nodes, res)
             if not target_node:
                 continue
 
@@ -191,13 +255,12 @@ def solve(data):
             g_time = nodes[target_node]["gather-time"]
             gathers_required = math.ceil(still_needed / node_yield)
 
-            est_ticks = travel_cost + (gathers_required * g_time)
-            if current_tick + est_ticks >= total_ticks:
-                break
-
             for step in path[1:]:
+                cost, _ = get_shortest_path(graph, current_loc, step)
+                if current_tick + cost >= total_ticks:
+                    break
                 actions.append({"type": "travel", "destination": step})
-                current_tick += get_shortest_path(graph, current_loc, step)[0]
+                current_tick += cost
                 current_loc = step
 
             for _ in range(gathers_required):
@@ -226,6 +289,8 @@ def solve(data):
                 actions.append({"type": "craft", "item": c_item, "quantity": c_qty})
                 current_tick += c_ticks
                 inventory[c_item] = inventory.get(c_item, 0) + c_qty
+                for sub_in, sub_q in RECIPES[c_item]["inputs"].items():
+                    inventory[sub_in] = max(0, inventory.get(sub_in, 0) - (sub_q * c_qty))
 
         _, build_path = get_shortest_path(graph, current_loc, town)
         if build_path and len(build_path) > 1:
@@ -237,23 +302,16 @@ def solve(data):
                 current_tick += cost
                 current_loc = step
 
-        can_build = True
-        prereq = upg_data["prerequisite"]
-        if prereq == "any_1_prod":
-            prod_built = sum(1 for u in town_built_upgrades[town] if UPGRADES[u]["type"] == "production")
-            if prod_built < 1:
-                can_build = False
-        elif prereq == "any_2_prod":
-            prod_built = sum(1 for u in town_built_upgrades[town] if UPGRADES[u]["type"] == "production")
-            if prod_built < 2:
-                can_build = False
-        elif prereq and prereq not in town_built_upgrades[town]:
-            can_build = False
-
-        if can_build and current_tick + upg_data["build_time"] < total_ticks:
+        if current_tick + upg_data["build_time"] <= total_ticks:
             actions.append({"type": "build", "upgrade": upg_name})
             current_tick += upg_data["build_time"]
+            enteloot -= upg_data["enteloot_cost"]
             town_built_upgrades[town].add(upg_name)
+
+            for comp, count in upg_data["components"].items():
+                inventory[comp] = max(0, inventory.get(comp, 0) - count)
+        else:
+            break
 
     return actions, current_tick
 
@@ -272,9 +330,15 @@ def create_submission(actions, output_file="submission.txt"):
 
 
 def main():
-    input_file = "2.txt"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Check command-line arguments, fallback to local 2.txt or standard 2.txt
     if len(sys.argv) > 1:
         input_file = sys.argv[1]
+    elif os.path.exists("2.txt"):
+        input_file = "2.txt"
+    else:
+        input_file = os.path.join(script_dir, "2.txt")
 
     data = load_input(input_file)
     total_ticks = data["run"]["total_ticks"]
