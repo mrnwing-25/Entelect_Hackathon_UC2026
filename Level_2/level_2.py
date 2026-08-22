@@ -61,7 +61,6 @@ def build_graph(data):
         u, v = r["between"]
         w = r["weight"]
         toll = r.get("toll", 0)
-        # For Level 2, stick to standard routes (toll == 0)
         if toll > 0:
             continue
         if u not in graph:
@@ -134,6 +133,7 @@ def solve(data):
     total_ticks = run_config["total_ticks"]
     start_town = run_config["starting_town"]
     enteloot = run_config["starting_enteloot"]
+
     towns = data["towns"]
     nodes = data["nodes"]
 
@@ -144,14 +144,12 @@ def solve(data):
     current_tick = 0
     inventory = {}
 
-    # Identify affinity crafting town
     affinity_town = start_town
     for t_name, t_info in towns.items():
         if "crafting" in t_info.get("affinities", []):
             affinity_town = t_name
             break
 
-    # Sequence of upgrades to target
     target_build_plan = [
         ("Demacia", "farmhouse"),
         ("Demacia", "fertilised-fields"),
@@ -168,16 +166,17 @@ def solve(data):
     town_built_upgrades = {t: set() for t in towns}
 
     for town, upg_name in target_build_plan:
+        if town not in towns:
+            continue
+
         upg_data = UPGRADES[upg_name]
 
-        # Decompose build requirements
         raw_reqs = {}
         for comp, count in upg_data["components"].items():
             comp_raws = compute_raw_requirements(comp, count)
             for r_res, r_qty in comp_raws.items():
                 raw_reqs[r_res] = raw_reqs.get(r_res, 0) + r_qty
 
-        # 1. Gather raw resources
         for res, needed_qty in raw_reqs.items():
             have = inventory.get(res, 0)
             still_needed = needed_qty - have
@@ -192,18 +191,15 @@ def solve(data):
             g_time = nodes[target_node]["gather-time"]
             gathers_required = math.ceil(still_needed / node_yield)
 
-            # Check tick limit
             est_ticks = travel_cost + (gathers_required * g_time)
             if current_tick + est_ticks >= total_ticks:
                 break
 
-            # Travel to node
             for step in path[1:]:
                 actions.append({"type": "travel", "destination": step})
                 current_tick += get_shortest_path(graph, current_loc, step)[0]
                 current_loc = step
 
-            # Gather
             for _ in range(gathers_required):
                 if current_tick + g_time >= total_ticks:
                     break
@@ -211,7 +207,6 @@ def solve(data):
                 current_tick += g_time
                 inventory[res] = inventory.get(res, 0) + node_yield
 
-        # 2. Travel to Crafting Town and Craft Components
         _, craft_path = get_shortest_path(graph, current_loc, affinity_town)
         if craft_path and len(craft_path) > 1:
             for step in craft_path[1:]:
@@ -225,7 +220,6 @@ def solve(data):
         for comp, count in upg_data["components"].items():
             craft_tree = get_component_craft_tree(comp, count)
             for c_item, c_qty in craft_tree:
-                # Crafting at affinity town = 1 tick per item
                 c_ticks = c_qty * 1
                 if current_tick + c_ticks >= total_ticks:
                     break
@@ -233,7 +227,6 @@ def solve(data):
                 current_tick += c_ticks
                 inventory[c_item] = inventory.get(c_item, 0) + c_qty
 
-        # 3. Travel to Target Town and Build
         _, build_path = get_shortest_path(graph, current_loc, town)
         if build_path and len(build_path) > 1:
             for step in build_path[1:]:
@@ -244,7 +237,6 @@ def solve(data):
                 current_tick += cost
                 current_loc = step
 
-        # Validate prerequisite check locally
         can_build = True
         prereq = upg_data["prerequisite"]
         if prereq == "any_1_prod":
@@ -285,13 +277,14 @@ def main():
         input_file = sys.argv[1]
 
     data = load_input(input_file)
+    total_ticks = data["run"]["total_ticks"]
     print(f"Input loaded from {input_file}.")
 
     actions, est_ticks = solve(data)
     print(f"Generated {len(actions)} actions.")
-    print(f"Estimated total ticks used: {est_ticks}/{data['total_ticks']}")
+    print(f"Estimated total ticks used: {est_ticks}/{total_ticks}")
 
-    validate_solution(actions, data["total_ticks"])
+    validate_solution(actions, total_ticks)
     create_submission(actions, "submission.txt")
     print("Submission created: submission.txt")
 
