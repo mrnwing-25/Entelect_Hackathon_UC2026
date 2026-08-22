@@ -1,6 +1,9 @@
 *.zip
 *.txt
 
+#agent
+agents/
+
 # Python
 __pycache__/
 *.py[cod]
