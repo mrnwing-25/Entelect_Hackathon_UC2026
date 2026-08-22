@@ -470,12 +470,12 @@ class SimulationEngine:
             return False
 
         u = UPGRADES[upgrade]
+        if self.tick + u["time"] > self.total_ticks:
+            return False
+
         for c, n in u["components"].items():
             self.inventory[c] -= n
         self.enteloot -= u["cost"]
-
-        if self.tick + u["time"] > self.total_ticks:
-            return False
 
         self.advance(self.tick + u["time"])
         self.built[town].add(upgrade)
