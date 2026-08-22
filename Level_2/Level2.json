@@ -1,0 +1,16 @@
+{
+    "actions":[
+        {"type": "travel", "destination":"N1"},
+        {"type": "gather"},
+        { "type": "gather" },
+        { "type": "travel", "destination": "Demacia" },
+        { "type": "craft", "item": "bread", "quantity": 3 },
+        { "type": "travel", "destination": "Piltover" },
+        { "type": "sell", "item": "bread", "quantity": 3 },
+        { "type": "buy", "item": "fish", "quantity": 4 },
+        { "type": "craft", "item": "fish-n-chips", "quantity": 2 },
+        { "type": "sell", "item": "fish-n-chips", "quantity": 2 },
+        { "type": "build", "upgrade": "farmhouse" }
+
+    ]
+}
