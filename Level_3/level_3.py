@@ -2306,7 +2306,7 @@ class Level3Strategy:
         )
 
         return towns
-        
+    
     def travel_to_crafting_town(self):
         """
         Move to the nearest town with crafting affinity.
