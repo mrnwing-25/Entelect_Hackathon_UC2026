@@ -1,354 +1,71 @@
-import json
-import heapq
-import math
-import os
-from collections import defaultdict, Counter
+#!/usr/bin/env python3
+import json, math, heapq, os
+from collections import Counter, defaultdict
 
-
-# ============================================================
-# LEVEL 3 CONSTANTS
-# ============================================================
-
-RESOURCE_SELL_PRICE = {
-    "wheat": 2,
-    "wood": 3,
-    "stone": 3,
-    "clay": 4,
-    "fish": 4,
-    "sheep": 5,
-    "ore": 6,
+RULES = {
+    "res": {
+        "wheat": (2, 4), "wood": (3, 5), "stone": (3, 5),
+        "clay": (4, 6), "fish": (4, 6), "sheep": (5, 8), "ore": (6, None)
+    },
+    "comp": {
+        "planks": {"wood": 2},
+        "thatch": {"wheat": 2},
+        "stone-blocks": {"stone": 3},
+        "mortar": {"clay": 1, "stone": 1},
+        "bricks": {"clay": 2, "mortar": 1},
+        "rope": {"sheep": 2},
+        "fencing": {"wood": 2, "rope": 1},
+        "kiln-glass": {"clay": 2, "wood": 2},
+        "nets": {"rope": 1, "fencing": 1},
+        "iron-fittings": {"ore": 2, "wood": 1},
+    },
+    "tools": {
+        "pickaxe": {"iron-fittings": 2, "planks": 2},
+        "boots": {"iron-fittings": 2, "rope": 2}
+    },
+    "goods": {
+        "pottery": {"clay": 4, "wood": 1},
+        "roof-tiles": {"clay": 3, "stone": 2},
+        "furniture": {"wood": 3, "sheep": 1},
+        "stew": {"sheep": 1, "fish": 1, "wheat": 1},
+        "bread": {"wheat": 3},
+        "stone-works": {"stone": 5},
+        "wooden-crafts": {"wood": 4},
+        "fish-n-chips": {"fish": 2, "wheat": 1},
+        "wool-garments": {"sheep": 3}
+    },
+    "upgrades": {
+        "fertilised-fields": ({"fencing": 2, "thatch": 2}, 500, 3, 1000, None),
+        "quarry": ({"stone-blocks": 3, "planks": 2}, 600, 3, 1000, None),
+        "pottery-house": ({"bricks": 4, "planks": 2}, 700, 3, 1000, None),
+        "farmhouse": ({"planks": 3, "thatch": 2}, 500, 3, 1000, None),
+        "woodlands": ({"fencing": 2, "rope": 2}, 500, 3, 1000, None),
+        "pier": ({"planks": 4, "nets": 2}, 600, 3, 1000, None),
+        "rec-center": ({"planks": 4, "bricks": 3, "rope": 1}, 1200, 4, 3000, ("prod", 1)),
+        "school": ({"bricks": 6, "planks": 3, "kiln-glass": 2}, 2000, 5, 5000, "rec-center"),
+        "library": ({"bricks": 5, "planks": 5, "kiln-glass": 2}, 2500, 5, 6000, "school"),
+        "fire-station": ({"bricks": 5, "stone-blocks": 3, "rope": 2}, 1800, 4, 4000, ("prod", 2)),
+        "police-station": ({"bricks": 6, "stone-blocks": 4, "iron-fittings": 2}, 2200, 5, 5000, "fire-station"),
+    }
 }
+PROD_UPGRADES = {"farmhouse", "pier", "fertilised-fields", "quarry", "woodlands", "pottery-house"}
 
-RESOURCE_BUY_PRICE = {
-    "wheat": 4,
-    "wood": 5,
-    "stone": 5,
-    "clay": 6,
-    "fish": 6,
-    "sheep": 8,
-}
+def expand_comp(name, qty=1):
+    cnt = Counter()
+    if name not in RULES["comp"]:
+        cnt[name] += qty
+        return cnt
+    for sub, need in RULES["comp"][name].items():
+        cnt.update(expand_comp(sub, need * qty))
+    return cnt
 
-RECIPES = {
-    "bread": {
-        "inputs": {"wheat": 3},
-        "time": 2,
-    },
-    "fish-n-chips": {
-        "inputs": {
-            "fish": 2,
-            "wheat": 1,
-        },
-        "time": 2,
-    },
-    "stew": {
-        "inputs": {
-            "sheep": 1,
-            "fish": 1,
-            "wheat": 1,
-        },
-        "time": 2,
-    },
-    "wooden-crafts": {
-        "inputs": {"wood": 4},
-        "time": 2,
-    },
-    "furniture": {
-        "inputs": {
-            "wood": 3,
-            "sheep": 1,
-        },
-        "time": 2,
-    },
-    "stone-works": {
-        "inputs": {"stone": 5},
-        "time": 2,
-    },
-    "roof-tiles": {
-        "inputs": {
-            "clay": 3,
-            "stone": 2,
-        },
-        "time": 2,
-    },
-    "wool-garments": {
-        "inputs": {"sheep": 3},
-        "time": 2,
-    },
-    "pottery": {
-        "inputs": {
-            "clay": 4,
-            "wood": 1,
-        },
-        "time": 2,
-    },
-}
+def expand_bom(comp_dict):
+    res = Counter()
+    for c, q in comp_dict.items():
+        res.update(expand_comp(c, q))
+    return res
 
-
-COMPONENTS = {
-    "planks": {
-        "inputs": {"wood": 2},
-        "time": 2,
-    },
-    "thatch": {
-        "inputs": {"wheat": 2},
-        "time": 2,
-    },
-    "stone-blocks": {
-        "inputs": {"stone": 3},
-        "time": 2,
-    },
-    "mortar": {
-        "inputs": {
-            "clay": 1,
-            "stone": 1,
-        },
-        "time": 2,
-    },
-    "bricks": {
-        "inputs": {
-            "clay": 2,
-            "mortar": 1,
-        },
-        "time": 2,
-    },
-    "rope": {
-        "inputs": {"sheep": 2},
-        "time": 2,
-    },
-    "fencing": {
-        "inputs": {
-            "wood": 2,
-            "rope": 1,
-        },
-        "time": 2,
-    },
-    "kiln-glass": {
-        "inputs": {
-            "clay": 2,
-            "wood": 2,
-        },
-        "time": 2,
-    },
-    "nets": {
-        "inputs": {
-            "rope": 1,
-            "fencing": 1,
-        },
-        "time": 2,
-    },
-    "iron-fittings": {
-        "inputs": {
-            "ore": 2,
-            "wood": 1,
-        },
-        "time": 2,
-    },
-}
-
-
-TOOLS = {
-    "boots": {
-        "inputs": {
-            "iron-fittings": 2,
-            "rope": 2,
-        },
-        "effect": "travel",
-    },
-    "pickaxe": {
-        "inputs": {
-            "iron-fittings": 2,
-            "planks": 2,
-        },
-        "effect": "gather",
-    },
-}
-
-
-UPGRADES = {
-    "Farmhouse": {
-        "boost": "sheep",
-        "components": {
-            "planks": 3,
-            "thatch": 2,
-        },
-        "enteloot": 500,
-        "time": 3,
-        "prerequisite": None,
-        "score": 1000,
-    },
-    "Pier": {
-        "boost": "fish",
-        "components": {
-            "planks": 4,
-            "nets": 2,
-        },
-        "enteloot": 600,
-        "time": 3,
-        "prerequisite": None,
-        "score": 1000,
-    },
-    "Fertilised-fields": {
-        "boost": "wheat",
-        "components": {
-            "fencing": 2,
-            "thatch": 2,
-        },
-        "enteloot": 500,
-        "time": 3,
-        "prerequisite": None,
-        "score": 1000,
-    },
-    "Quarry": {
-        "boost": "stone",
-        "components": {
-            "stone-blocks": 3,
-            "planks": 2,
-        },
-        "enteloot": 600,
-        "time": 3,
-        "prerequisite": None,
-        "score": 1000,
-    },
-    "Woodlands": {
-        "boost": "wood",
-        "components": {
-            "fencing": 2,
-            "rope": 2,
-        },
-        "enteloot": 500,
-        "time": 3,
-        "prerequisite": None,
-        "score": 1000,
-    },
-    "Pottery-house": {
-        "boost": "clay",
-        "components": {
-            "bricks": 4,
-            "planks": 2,
-        },
-        "enteloot": 700,
-        "time": 3,
-        "prerequisite": None,
-        "score": 1000,
-    },
-    "Rec-center": {
-        "boost": "enteloot_amount_20",
-        "components": {
-            "planks": 4,
-            "bricks": 3,
-            "rope": 1,
-        },
-        "enteloot": 1200,
-        "time": 4,
-        "prerequisite": "production",
-        "score": 3000,
-    },
-    "Fire-station": {
-        "boost": "boost_duration_50",
-        "components": {
-            "bricks": 5,
-            "stone-blocks": 3,
-            "rope": 2,
-        },
-        "enteloot": 1800,
-        "time": 4,
-        "prerequisite": "production2",
-        "score": 4000,
-    },
-    "School": {
-        "boost": "enteloot_amount_50",
-        "components": {
-            "bricks": 6,
-            "planks": 3,
-            "kiln-glass": 2,
-        },
-        "enteloot": 2000,
-        "time": 5,
-        "prerequisite": "Rec-center",
-        "score": 5000,
-    },
-    "Police-station": {
-        "boost": "enteloot_rate_minus_2",
-        "components": {
-            "bricks": 6,
-            "stone-blocks": 4,
-            "iron-fittings": 2,
-        },
-        "enteloot": 2200,
-        "time": 5,
-        "prerequisite": "Fire-station",
-        "score": 5000,
-    },
-    "Library": {
-        "boost": "enteloot_amount_50",
-        "components": {
-            "bricks": 5,
-            "planks": 5,
-            "kiln-glass": 2,
-        },
-        "enteloot": 2500,
-        "time": 5,
-        "prerequisite": "School",
-        "score": 6000,
-    },
-}
-
-
-# ============================================================
-# GENERAL UTILITIES
-# ============================================================
-
-def load_input(filename):
-    """Load the level JSON."""
-    with open(filename, "r", encoding="utf-8") as file:
-        return json.load(file)
-
-
-def normalise_name(value):
-    """
-    Convert names to a consistent comparison form.
-
-    This is useful because JSON uses names such as:
-        Fertilised-fields
-        Rec-center
-        iron-fittings
-
-    while Python code may use other casing.
-    """
-    return str(value).strip().lower().replace("_", "-")
-
-
-def deep_copy_dict(value):
-    """Small dependency-free recursive dictionary copy."""
-    if isinstance(value, dict):
-        return {
-            key: deep_copy_dict(val)
-            for key, val in value.items()
-        }
-
-    if isinstance(value, list):
-        return [
-            deep_copy_dict(item)
-            for item in value
-        ]
-
-    return value
-
-
-# ============================================================
-# GRAPH
-# ============================================================
-
-class Graph:
-    """
-    Graph supporting:
-
-        - standard routes
-        - fast routes
-        - parallel edges
-        - route reconstruction
-    """
-
+class Sim:
     def __init__(self, data):
         self.adjacency = defaultdict(list)
 
