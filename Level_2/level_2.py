@@ -272,7 +272,7 @@ def create_submission(actions, output_file="submission.txt"):
 
 
 def main():
-    input_file = "level2.json"
+    input_file = "2.txt"
     if len(sys.argv) > 1:
         input_file = sys.argv[1]
 
