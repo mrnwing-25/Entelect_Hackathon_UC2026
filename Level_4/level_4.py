@@ -250,6 +250,7 @@ class SimulationEngine:
         self.enteloot = int(data["run"]["starting_enteloot"])
         self.built = defaultdict(set)
         self.tools = set()
+        self.suppress_upkeep = False
 
         for name, town_info in self.towns.items():
             for upg in town_info.get("upgrades", []):
@@ -346,7 +347,8 @@ class SimulationEngine:
 
             self.advance(self.tick + w_time)
             self.loc = v
-            self.check_and_upkeep()
+            if not self.suppress_upkeep:
+                self.check_and_upkeep()
 
         return True
 
@@ -779,6 +781,7 @@ def solve(data):
         # 3. Remaining 4 Production Upgrades
         for p in all_prods[2:]:
             sim.build_upgrade(town, p)
+
 
     # ----------------------------------------------------
     # PHASE 6: 100% TICK EXHAUSTION (CONTINUOUS TRADING & LIQUIDATION)
