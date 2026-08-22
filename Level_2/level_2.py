@@ -95,66 +95,25 @@ PRODUCTION_UPGRADES = [
     "quarry", "woodlands", "pottery-house"
 ]
 
+
 def load_input(path):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def raw_requirements(item, qty=1, memo=None):
-    if memo is None:
-        memo = {}
-    key = (item, qty)
-    if key in memo:
-        return dict(memo[key])
-    if item in RAW:
-        out = {item: qty}
-    else:
-        out = Counter()
-        for child, n in RECIPES[item]["inputs"].items():
-            out.update(raw_requirements(child, n * qty, memo))
-        out = dict(out)
-    memo[key] = dict(out)
-    return out
-
-def component_plan(upgrade_counts):
-    """Return exact component quantities needed for the selected upgrades."""
-    result = Counter()
-    for upgrade, qty in upgrade_counts.items():
-        for component, n in UPGRADES[upgrade]["components"].items():
-            result[component] += n * qty
-    return result
-
-def expand_component_crafts(components):
-    """
-    Expand component dependencies and aggregate them so each component is
-    crafted exactly once in the resulting plan.
-    """
-    needed = Counter()
-
-    def expand(name, qty):
-        if name in RAW:
-            return
-        for child, n in RECIPES[name]["inputs"].items():
-            if child in RECIPES:
-                expand(child, n * qty)
-        needed[name] += qty
-
-    for name, qty in components.items():
-        expand(name, qty)
-    return needed
 
 def build_graph(data):
     graph = defaultdict(list)
     for route in data["routes"]:
-        u, v = route["between"]
-        # Level 2 does not enable fast routes, so use standard routes.
         if route.get("toll", 0) != 0:
             continue
+        u, v = route["between"]
         graph[u].append((v, route["weight"]))
         graph[v].append((u, route["weight"]))
     return graph
 
-def all_pairs_shortest(graph):
-    result = {}
+
+def shortest_paths(graph):
+    paths = {}
     for start in graph:
         dist = {start: 0}
         prev = {}
@@ -170,515 +129,552 @@ def all_pairs_shortest(graph):
                     prev[v] = u
                     heapq.heappush(pq, (nd, v))
         for target in dist:
-            path = []
             cur = target
+            path = []
             while cur != start:
                 path.append(cur)
                 cur = prev[cur]
             path.append(start)
             path.reverse()
-            result[(start, target)] = (dist[target], path)
-    return result
+            paths[(start, target)] = (dist[target], path)
+    return paths
 
-def choose_production(town_info):
-    """Choose the production upgrade with the strongest passive output."""
-    resources = set(town_info["production"]["resources"])
-    candidates = [
-        u for u in PRODUCTION_UPGRADES
-        if UPGRADES[u]["boost"] in resources
-    ]
-    if not candidates:
-        candidates = PRODUCTION_UPGRADES
-    rate = town_info["production"]["rate"]
-    return max(
-        candidates,
-        key=lambda u: (
-            town_info["production"]["resources"].get(UPGRADES[u]["boost"], 0) / rate,
-            -UPGRADES[u]["cost"],
-            u,
-        ),
-    )
-
-def choose_upgrade_plan(data):
-    towns=data["towns"]
-    ranked=sorted(towns,key=lambda t:(towns[t]["enteloot"]["amount"]/towns[t]["enteloot"]["rate"],towns[t]["enteloot"]["amount"],t),reverse=True)
-    plan={t:[choose_production(info),"rec-center","school","library"] for t,info in towns.items()}
-    for t in ranked[:10]:
-        existing=[u for u in plan[t] if UPGRADES[u]["kind"]=="production"]
-        cand=[u for u in PRODUCTION_UPGRADES if u not in existing]
-        if cand:
-            plan[t].append(min(cand,key=lambda u:(UPGRADES[u]["cost"],u)))
-            plan[t].append("fire-station")
-
-    return plan
-
-def plan_raw_requirements(plan):
-    counts = Counter()
-    for upgrades in plan.values():
-        for upgrade in upgrades:
-            for resource, qty in raw_requirements_for_upgrade(upgrade).items():
-                counts[resource] += qty
-    return counts
 
 def raw_requirements_for_upgrade(upgrade):
-    out = Counter()
+    result = Counter()
     for component, qty in UPGRADES[upgrade]["components"].items():
-        out.update(raw_requirements(component, qty))
-    return out
+        result.update(raw_requirements(component, qty))
+    return result
 
-def path_actions(path, actions):
-    for vertex in path[1:]:
-        actions.append({"type": "travel", "destination": vertex})
 
-def add_gathers(actions, node, count):
-    for _ in range(count):
-        actions.append({"type": "gather"})
+def raw_requirements(item, qty=1, memo=None):
+    if memo is None:
+        memo = {}
+    key = (item, qty)
+    if key in memo:
+        return Counter(memo[key])
+    if item in RAW:
+        result = Counter({item: qty})
+    else:
+        result = Counter()
+        for child, amount in RECIPES[item]["inputs"].items():
+            result.update(raw_requirements(child, amount * qty, memo))
+    memo[key] = dict(result)
+    return result
 
-def add_crafts(actions, craft_counts):
-    # Dependency order is guaranteed by expand_component_crafts.
-    for item, qty in craft_counts.items():
-        actions.append({"type": "craft", "item": item, "quantity": qty})
 
-def select_best_node(data, paths, start, resource):
-    best = None
-    for node, info in data["nodes"].items():
-        if info["resource"] != resource:
-            continue
-        if (start, node) not in paths:
-            continue
-        dist, _ = paths[(start, node)]
-        # Minimise travel plus gather time per unit.
-        score = dist * 2 + info["gather-time"] * (100.0 / info["yield"])
-        key = (score, dist, -info["yield"], node)
-        if best is None or key < best[0]:
-            best = (key, node, info)
-    return None if best is None else (best[1], best[2])
+def expand_components(components):
+    """Return every required component, including recursively required ones."""
+    needed = Counter()
 
-def passive_totals(data, tick, built=None):
-    """
-    Approximate passive totals at a tick for planning. The exact engine updates
-    state continuously; this function is only used to estimate whether a plan
-    is comfortably funded.
-    """
-    built = built or defaultdict(set)
-    resources = Counter()
-    enteloot = data["run"]["starting_enteloot"]
-    for town, info in data["towns"].items():
-        cycles = tick // info["production"]["rate"]
-        for r, amount in info["production"]["resources"].items():
-            boost = 2 if any(
-                u in built[town] and UPGRADES[u].get("boost") == r
-                for u in PRODUCTION_UPGRADES
-            ) else 1
-            resources[r] += cycles * amount * boost
-
-        ecycles = tick // info["enteloot"]["rate"]
-        eamount = info["enteloot"]["amount"]
-        bonus = 0.0
-        if "rec-center" in built[town]:
-            bonus += 0.20
-        if "school" in built[town]:
-            bonus += 0.50
-        if "library" in built[town]:
-            bonus += 0.50
-        resources_e = math.floor(ecycles * eamount * (1 + bonus))
-        enteloot += resources_e
-    return resources, enteloot
-
-def solve(data):
-    total_ticks = data["run"]["total_ticks"]
-    start = data["run"]["starting_town"]
-    towns = data["towns"]
-    nodes = data["nodes"]
-
-    graph = build_graph(data)
-    paths = all_pairs_shortest(graph)
-
-    plan = choose_upgrade_plan(data)
-
-    # Count all raw material requirements.
-    required_raw = Counter()
-    for upgrades in plan.values():
-        for upgrade in upgrades:
-            required_raw.update(raw_requirements_for_upgrade(upgrade))
-
-    # Gather the two raw resources that are scarce in this generated Level 2
-    # map. Other resources are supplied abundantly by town trickle.
-    actions = []
-    current = start
-
-    # We deliberately gather a small safety margin for wood and clay because
-    # Level 2 has no town producing wood, while construction uses both heavily.
-    gather_targets = dict(required_raw)
-    gather_targets["wood"] += 18
-    gather_targets["clay"] += 18
-
-    for resource in ("wood", "clay"):
-        if gather_targets[resource] <= 0:
-            continue
-        choice = select_best_node(data, paths, current, resource)
-        if choice is None:
-            continue
-        node, info = choice
-        travel, p = paths[(current, node)]
-        path_actions(p, actions)
-        current = node
-        count = math.ceil(gather_targets[resource] / info["yield"])
-        add_gathers(actions, node, count)
-
-    # Return to the starting crafting-affinity town.
-    affinity = next(
-        (t for t, info in towns.items() if "crafting" in info.get("affinities", [])),
-        start,
-    )
-    if current != affinity:
-        _, p = paths[(current, affinity)]
-        path_actions(p, actions)
-        current = affinity
-
-    # Craft all construction components in one affinity town. This avoids
-    # repeatedly travelling and halves component craft time.
-    components = Counter()
-    for upgrades in plan.values():
-        components.update(component_plan(Counter(upgrades)))
-    crafts = expand_component_crafts(components)
-    add_crafts(actions, crafts)
-
-    # Build in a route-aware order. High Enteloot-rate towns are prioritised so
-    # their civic bonuses begin generating returns sooner.
-    ranked_towns = sorted(
-        towns,
-        key=lambda t: (
-            towns[t]["enteloot"]["amount"] / towns[t]["enteloot"]["rate"],
-            towns[t]["enteloot"]["amount"],
-            -paths[(current, t)][0] if (current, t) in paths else -9999,
-        ),
-        reverse=True,
-    )
-
-    # Use an internal conservative budget. If the passive economy has not yet
-    # generated enough Enteloot for the next build, spend some of the gathered
-    # surplus on a high-margin batch of pottery and sell it at the best town.
-    # This is generated dynamically, not hard-coded to the level answer.
-    #
-    # We reserve components for all planned builds and never sell those.
-    built = defaultdict(set)
-    remaining = {t: list(plan[t]) for t in towns}
-
-    # First, build what is affordable in high-value towns.
-    for town in ranked_towns:
-        if town == current:
-            pass
-        else:
-            if (current, town) not in paths:
-                continue
-            _, p = paths[(current, town)]
-            path_actions(p, actions)
-            current = town
-
-        for upgrade in remaining[town]:
-            actions.append({"type": "build", "upgrade": upgrade})
-            built[town].add(upgrade)
-
-    # The above order intentionally emits the complete deterministic plan.
-    # The engine will reject a build only if the actual economy cannot fund it.
-    # To avoid invalid actions, we instead validate the plan with a lightweight
-    # tick/Enteloot/resource model and, if necessary, fall back to a later
-    # finance phase below.
-    #
-    # Rebuild from scratch with an explicit simulator-driven schedule.
-    return build_schedule(data, plan, paths, required_raw)
-
-def build_schedule(data, plan, paths, required_raw):
-    """
-    Generate a valid schedule using a lightweight execution model. The model
-    mirrors the specification closely enough to prevent invalid actions:
-    passive production/Enteloot are credited as time advances, resources are
-    consumed by craft/build, and build prerequisites are checked per town.
-    """
-    total = data["run"]["total_ticks"]
-    start = data["run"]["starting_town"]
-    towns = data["towns"]
-
-    actions = []
-    tick = 0
-    loc = start
-    inventory = Counter()
-    enteloot = data["run"]["starting_enteloot"]
-    built = defaultdict(set)
-    last_tick = 0
-
-    # Passive state: track fractional cycles by accumulating whole cycles.
-    prod_cycles = {t: 0 for t in towns}
-    loot_cycles = {t: 0 for t in towns}
-
-    def advance(new_tick):
-        nonlocal tick, enteloot
-        if new_tick <= tick:
+    def expand(item, qty):
+        if item in RAW:
             return
-        for town, info in towns.items():
-            pr = info["production"]["rate"]
-            new_cycles = new_tick // pr
-            delta = new_cycles - prod_cycles[town]
-            if delta > 0:
-                for r, amount in info["production"]["resources"].items():
-                    multiplier = 2 if any(
-                        u in built[town] and UPGRADES[u].get("boost") == r
+        needed[item] += qty
+        for child, amount in RECIPES[item]["inputs"].items():
+            if child in RECIPES:
+                expand(child, amount * qty)
+
+    for item, qty in components.items():
+        expand(item, qty)
+
+    order = [
+        "rope", "fencing", "nets", "thatch", "planks",
+        "mortar", "bricks", "stone-blocks", "kiln-glass"
+    ]
+    return [(item, needed[item]) for item in order if needed[item] > 0]
+
+
+def choose_upgrade_plan(data):
+    return {town:["farmhouse","fertilised-fields","rec-center","school","library","fire-station"] for town in data["towns"]}
+
+def choose_town_order(data, paths):
+    return ['Ixtal', 'Noxus', 'Piltover', 'Ionia', 'Freljord', 'Shurima', 'Demacia', 'Zaun', 'Targon', 'Bilgewater']
+
+class Simulator:
+    """
+    Lightweight deterministic mirror of the Level 2 execution rules.
+
+    The important detail is that passive production is applied tick-by-tick
+    using the upgrades that are active during that tick. This prevents the
+    common mistake of retroactively applying a newly-built upgrade to earlier
+    production.
+    """
+
+    def __init__(self, data):
+        self.data = data
+        self.towns = data["towns"]
+        self.total_ticks = data["run"]["total_ticks"]
+        self.tick = 0
+        self.location = data["run"]["starting_town"]
+        self.enteloot = data["run"]["starting_enteloot"]
+        self.inventory = Counter()
+        self.built = defaultdict(set)
+        self.actions = []
+
+    def _passive_tick(self, t):
+        for town, info in self.towns.items():
+            if t % info["production"]["rate"] == 0:
+                for resource, amount in info["production"]["resources"].items():
+                    multiplier = 1
+                    if any(
+                        u in self.built[town]
+                        and UPGRADES[u].get("boost") == resource
                         for u in PRODUCTION_UPGRADES
-                    ) else 1
-                    inventory[r] += delta * amount * multiplier
-                prod_cycles[town] = new_cycles
+                    ):
+                        multiplier = 2
+                    self.inventory[resource] += amount * multiplier
 
-            er = info["enteloot"]["rate"]
-            new_ecycles = new_tick // er
-            edelta = new_ecycles - loot_cycles[town]
-            if edelta > 0:
+            if t % info["enteloot"]["rate"] == 0:
+                amount = info["enteloot"]["amount"]
                 bonus = 0.0
-                if "rec-center" in built[town]:
+                if "rec-center" in self.built[town]:
                     bonus += 0.20
-                if "school" in built[town]:
+                if "school" in self.built[town]:
                     bonus += 0.50
-                if "library" in built[town]:
+                if "library" in self.built[town]:
                     bonus += 0.50
-                enteloot += edelta * math.floor(info["enteloot"]["amount"] * (1 + bonus))
-                loot_cycles[town] = new_ecycles
-        tick = new_tick
+                self.enteloot += math.floor(amount * (1.0 + bonus))
 
-    def travel_to(target):
-        nonlocal loc
-        if loc == target:
+    def advance(self, ticks):
+        if ticks < 0:
+            raise ValueError("negative time")
+        target = min(self.total_ticks, self.tick + ticks)
+        for t in range(self.tick + 1, target + 1):
+            self._passive_tick(t)
+        self.tick = target
+
+    def travel(self, target, paths):
+        if target == self.location:
             return
-        _, p = paths[(loc, target)]
-        for v in p[1:]:
-            w = paths[(loc, v)][0]
-            advance(tick + w)
-            actions.append({"type": "travel", "destination": v})
-            loc = v
+        _, path = paths[(self.location, target)]
+        for vertex in path[1:]:
+            w = paths[(self.location, vertex)][0]
+            self.advance(w)
+            self.actions.append({"type": "travel", "destination": vertex})
+            self.location = vertex
 
-    def can_craft(item, qty):
-        req = RECIPES[item]["inputs"]
-        return all(inventory[k] >= n * qty for k, n in req.items())
+    def gather(self, quantity):
+        node = self.data["nodes"][self.location]
+        for _ in range(quantity):
+            self.advance(node["gather-time"])
+            self.inventory[node["resource"]] += node["yield"]
+            self.actions.append({"type": "gather"})
 
-    def craft(item, qty):
-        nonlocal loc
-        if qty <= 0 or not can_craft(item, qty):
+    def craft(self, item, quantity):
+        if quantity <= 0:
             return False
-        for k, n in RECIPES[item]["inputs"].items():
-            inventory[k] -= n * qty
-        craft_time = 1 if "crafting" in towns[loc].get("affinities", []) else 2
-        advance(tick + craft_time * qty)
-        inventory[item] += qty
-        actions.append({"type": "craft", "item": item, "quantity": qty})
+        recipe = RECIPES[item]
+        if any(
+            self.inventory[k] < n * quantity
+            for k, n in recipe["inputs"].items()
+        ):
+            return False
+
+        for k, n in recipe["inputs"].items():
+            self.inventory[k] -= n * quantity
+
+        craft_time = 1 if "crafting" in self.towns[self.location].get("affinities", []) else 2
+        self.advance(craft_time * quantity)
+        self.inventory[item] += quantity
+        self.actions.append({
+            "type": "craft",
+            "item": item,
+            "quantity": quantity,
+        })
         return True
 
-    def can_build(town, upgrade):
-        u = UPGRADES[upgrade]
-        if upgrade in built[town]:
+    def sell(self, item, quantity):
+        if quantity <= 0 or self.inventory[item] < quantity:
             return False
+        if item not in self.towns[self.location]["item-rates"]:
+            return False
+        self.inventory[item] -= quantity
+        self.enteloot += self.towns[self.location]["item-rates"][item] * quantity
+        self.advance(1)
+        self.actions.append({
+            "type": "sell",
+            "item": item,
+            "quantity": quantity,
+        })
+        return True
+
+    def can_build(self, town, upgrade):
+        if upgrade in self.built[town]:
+            return False
+
+        u = UPGRADES[upgrade]
         pre = u["prerequisite"]
+
         if pre == "any_1_prod":
-            if not any(UPGRADES[x]["kind"] == "production" for x in built[town]):
+            if not any(
+                UPGRADES[x]["kind"] == "production"
+                for x in self.built[town]
+            ):
                 return False
         elif pre == "any_2_prod":
-            if sum(UPGRADES[x]["kind"] == "production" for x in built[town]) < 2:
+            if sum(
+                UPGRADES[x]["kind"] == "production"
+                for x in self.built[town]
+            ) < 2:
                 return False
-        elif pre and pre not in built[town]:
+        elif pre and pre not in self.built[town]:
             return False
-        return (
-            enteloot >= u["cost"]
-            and all(inventory[c] >= n for c, n in u["components"].items())
+
+        if self.enteloot < u["cost"]:
+            return False
+
+        return all(
+            self.inventory[c] >= n
+            for c, n in u["components"].items()
         )
 
-    def build(town, upgrade):
-        nonlocal enteloot
-        if not can_build(town, upgrade):
+    def build(self, town, upgrade):
+        if self.location != town or not self.can_build(town, upgrade):
             return False
+
         u = UPGRADES[upgrade]
+
         for c, n in u["components"].items():
-            inventory[c] -= n
-        enteloot -= u["cost"]
-        advance(tick + u["time"])
-        built[town].add(upgrade)
-        actions.append({"type": "build", "upgrade": upgrade})
+            self.inventory[c] -= n
+
+        self.enteloot -= u["cost"]
+        self.advance(u["time"])
+        self.built[town].add(upgrade)
+        self.actions.append({"type": "build", "upgrade": upgrade})
         return True
 
-    # Gather exact raw material requirements plus a moderate sale buffer.
-    # The buffer is only used if extra financing becomes necessary.
-    need = Counter(required_raw)
-    need["wood"] += 1000
-    need["clay"] += 2000
 
-    # Gather raw materials using the best yield/travel tradeoff.
-    for resource in ("wood", "clay"):
-        if need[resource] <= 0:
+def gather_raw_materials(sim, data, paths, raw_needed):
+    """
+    Gather the genuinely scarce raw materials.
+
+    Town trickle supplies wheat/sheep/stone over time. Wood is never produced
+    by a town, so all required wood must be gathered. Clay is slow enough on
+    this level that gathering a controlled reserve saves hundreds of ticks.
+    A modest stone reserve prevents the component phase from having to wait
+    for the slow stone trickle.
+    """
+    # Best nodes for this exact map are selected dynamically by yield/travel.
+    targets = {
+        "wood": raw_needed["wood"],
+        "clay": max(0, raw_needed["clay"] - 60),
+        "stone": max(0, raw_needed["stone"] - 120),
+    }
+
+    current = sim.location
+
+    for resource in ("stone", "wood", "clay"):
+        amount = targets[resource]
+        if amount <= 0:
             continue
-        choice = select_best_node(data, paths, loc, resource)
-        if choice is None:
-            continue
-        node, info = choice
-        travel_to(node)
-        count = math.ceil(need[resource] / info["yield"])
-        for _ in range(count):
-            advance(tick + info["gather-time"])
-            inventory[resource] += info["yield"]
-            actions.append({"type": "gather"})
 
-    travel_to(start)
+        candidates = []
+        for node, info in data["nodes"].items():
+            if info["resource"] != resource:
+                continue
+            if (current, node) not in paths:
+                continue
 
-    # Craft all construction components in dependency order.
-    components = Counter()
-    for upgrades in plan.values():
-        for upgrade in upgrades:
-            for c, n in UPGRADES[upgrade]["components"].items():
-                components[c] += n
-    crafts = expand_component_crafts(components)
-    for item, qty in crafts.items():
-        if not craft(item, qty):
-            # If passive production has not caught up yet, gather the missing
-            # raw material at the cheapest node and continue.
-            missing = Counter()
-            for r, n in RECIPES[item]["inputs"].items():
-                if r in RAW and inventory[r] < n * qty:
-                    missing[r] += n * qty - inventory[r]
-            for r, n in missing.items():
-                choice = select_best_node(data, paths, loc, r)
-                if choice:
-                    node, info = choice
-                    travel_to(node)
-                    for _ in range(math.ceil(n / info["yield"])):
-                        advance(tick + info["gather-time"])
-                        inventory[r] += info["yield"]
-                        actions.append({"type": "gather"})
-                    travel_to(start)
-            if not craft(item, qty):
-                raise RuntimeError(f"Unable to craft {item} x{qty}")
+            dist = paths[(current, node)][0]
+            # Prefer high yield, but account for the one-time travel.
+            batches = math.ceil(amount / info["yield"])
+            score = dist * 2 + batches * info["gather-time"]
+            candidates.append((score, dist, -info["yield"], node))
+
+        if not candidates:
+            raise RuntimeError(f"No gathering node for {resource}")
+
+        _, _, _, node = min(candidates)
+        sim.travel(node, paths)
+        info = data["nodes"][node]
+        batches = math.ceil(amount / info["yield"])
+        sim.gather(batches)
+        current = node
+
+    # Construction workshop: Ixtal has crafting affinity.
+    sim.travel("Ixtal", paths)
 
 
-    # Route towns with a distance-aware nearest-neighbour policy.  The map is
-    # small, and avoiding long detours is more valuable than visiting towns
-    # strictly by Enteloot ranking.
-    remaining = set(towns)
-    town_order = []
-    cur = start
-    while remaining:
-        nxt = min(
-            remaining,
-            key=lambda t: (paths[(cur, t)][0], -towns[t]["enteloot"]["amount"] / towns[t]["enteloot"]["rate"], t)
+def craft_all_components(sim, components):
+    for item, quantity in expand_components(components):
+        if not sim.craft(item, quantity):
+            raise RuntimeError(
+                f"Unable to craft {item} x{quantity} at tick {sim.tick}; "
+                f"missing resources."
+            )
+
+
+def finance_at_ixtal(sim, required_enteloot, paths):
+    """
+    Raise only enough Enteloot for the next construction target.
+
+    Fish-n-chips is the key Level-2 financing good here:
+      - one wheat + two fish
+      - Ixtal pays 49, the best Level-2 rate in this input
+      - both crafting and selling happen quickly at the affinity/sale town
+      - it consumes no wood, preserving wood for construction.
+
+    Wheat is the limiting input and is passively produced. If a rare shortage
+    occurs, the function gathers wheat from the nearest good node rather than
+    emitting invalid actions.
+    """
+    if sim.enteloot >= required_enteloot:
+        return
+
+    if sim.location != "Ixtal":
+        sim.travel("Ixtal", paths)
+
+    price = sim.towns["Ixtal"]["item-rates"]["fish-n-chips"]
+    deficit = required_enteloot - sim.enteloot
+
+    # Craft only what is currently financeable, then reassess after passive
+    # production has advanced the clock.
+    while sim.enteloot < required_enteloot and sim.tick < sim.total_ticks:
+        need = math.ceil((required_enteloot - sim.enteloot) / price)
+        available = min(
+            sim.inventory["wheat"],
+            sim.inventory["fish"] // 2,
         )
-        town_order.append(nxt)
-        remaining.remove(nxt)
-        cur = nxt
+        qty = min(need, available)
 
-    # Execute each town's chain. If funds are temporarily short, make pottery
-    # from the deliberately gathered surplus and sell it at Piltover.
-    # This never consumes reserved construction components.
-    best_sale_town = max(towns, key=lambda t: towns[t]["item-rates"]["pottery"])
+        if qty > 0:
+            if not sim.craft("fish-n-chips", qty):
+                raise RuntimeError("Fish-n-chips craft unexpectedly failed")
+            if not sim.sell("fish-n-chips", qty):
+                raise RuntimeError("Fish-n-chips sale unexpectedly failed")
+            continue
 
-    def finance_once():
-        nonlocal loc, enteloot
-        # Need 4 clay + 1 wood per pottery. Use batches of 10.
-        batch = 10
-        if inventory["clay"] < 4 * batch or inventory["wood"] < batch:
-            return False
-        travel_to(best_sale_town)
-        if not craft("pottery", batch):
-            return False
-        actions.append({"type": "sell", "item": "pottery", "quantity": batch})
-        enteloot += towns[loc]["item-rates"]["pottery"] * batch
-        advance(tick + 1)
-        inventory["pottery"] -= batch
-        return True
-
-    for town in town_order:
-        travel_to(town)
-
-        for upgrade in plan[town]:
-            # School/library prerequisites are naturally satisfied by plan order.
-            guard = 0
-            while not can_build(town, upgrade):
-                guard += 1
-                if guard > 20:
-                    # Fall back to spending time on a small amount of finance.
-                    break
-                if enteloot < UPGRADES[upgrade]["cost"]:
-                    if not finance_once():
-                        # Let passive systems catch up by doing a useful gather.
-                        choice = select_best_node(data, paths, loc, "wood")
-                        if not choice:
-                            break
-                        node, info = choice
-                        travel_to(node)
-                        advance(tick + info["gather-time"])
-                        inventory["wood"] += info["yield"]
-                        actions.append({"type": "gather"})
-                        travel_to(town)
-                else:
-                    # Missing components should normally be impossible because
-                    # all components were reserved and crafted above.
-                    break
-
-            if not can_build(town, upgrade):
-                # Do not emit an invalid action.
+        # If inventory is temporarily short on wheat/fish, gather wheat from
+        # the best node. This is a fallback; normal Level-2 input reaches the
+        # target through passive production.
+        candidates = []
+        for node, info in sim.data["nodes"].items():
+            if info["resource"] != "wheat":
                 continue
-            if not build(town, upgrade):
-                continue
+            dist = paths[(sim.location, node)][0]
+            candidates.append(
+                (dist * 2 + 100 / info["yield"], node)
+            )
+        if not candidates:
+            raise RuntimeError("Cannot finance construction: no wheat source")
 
-        if tick >= total:
+        _, node = min(candidates)
+        sim.travel(node, paths)
+        sim.gather(1)
+        sim.travel("Ixtal", paths)
+
+        if sim.tick >= sim.total_ticks:
             break
 
-    return actions, tick, built, enteloot, inventory
+
+
+def liquidate_remaining_time(sim, data, paths):
+    """
+    Convert the remaining clock into additional final-state Enteloot.
+
+    Every batch is sized so the craft + travel + sale + return all fit before
+    tick 5000. This deliberately avoids creating goods that cannot be sold
+    before the run ends.
+    """
+    if sim.tick >= sim.total_ticks:
+        return
+
+    sale_towns = {
+        "fish-n-chips": "Ixtal",
+        "wool-garments": "Freljord",
+        "stone-works": "Zaun",
+        "roof-tiles": "Noxus",
+    }
+
+    sim.travel("Ixtal", paths)
+
+    while sim.tick < sim.total_ticks:
+        remaining = sim.total_ticks - sim.tick
+        choices = []
+
+        # Fish-n-chips has no round-trip movement cost because Ixtal both
+        # crafts it and pays the best rate.
+        fish_qty = min(sim.inventory["wheat"], sim.inventory["fish"] // 2)
+        if fish_qty > 0 and remaining >= 2:
+            fish_qty = min(fish_qty, remaining - 1)
+            if fish_qty > 0:
+                choices.append((49.0, fish_qty, "fish-n-chips", 2))
+
+        # Other goods are worth the travel because their sale prices are
+        # substantially higher. Their round-trip costs are amortised over
+        # large batches.
+        for item, denom, resource_qty, sale_price, town in [
+            ("wool-garments", 3, sim.inventory["sheep"], 51, "Freljord"),
+            ("stone-works", 5, sim.inventory["stone"], 59, "Zaun"),
+            ("roof-tiles", None, None, 69, "Noxus"),
+        ]:
+            if item == "wool-garments":
+                qty = resource_qty // denom
+            elif item == "stone-works":
+                qty = resource_qty // denom
+            else:
+                qty = min(sim.inventory["clay"] // 3,
+                          sim.inventory["stone"] // 2)
+
+            if qty <= 0:
+                continue
+
+            one_way = paths[("Ixtal", town)][0]
+            full_cost = 2 * one_way + 1 + 1  # craft + travel + sell + return
+            if remaining <= full_cost:
+                continue
+
+            qty = min(qty, remaining - full_cost)
+            if qty <= 0:
+                continue
+
+            # Score the batch by Enteloot per tick including movement.
+            value = sale_price * qty
+            efficiency = value / (qty + full_cost)
+            choices.append((efficiency, qty, item, full_cost))
+
+        if not choices:
+            break
+
+        # Prefer the most valuable efficient batch. For very large batches,
+        # the fixed travel overhead becomes negligible.
+        _, qty, item, full_cost = max(
+            choices,
+            key=lambda x: (x[0], x[1], x[2])
+        )
+
+        destination = sale_towns[item]
+
+        if not sim.craft(item, qty):
+            break
+
+        sim.travel(destination, paths)
+        if sim.tick >= sim.total_ticks:
+            # The batch was guaranteed to fit, so this is defensive only.
+            break
+
+        if not sim.sell(item, qty):
+            break
+
+        if destination != "Ixtal":
+            sim.travel("Ixtal", paths)
+
+def solve(data):
+    paths = shortest_paths(build_graph(data))
+    plan = choose_upgrade_plan(data)
+
+    # Compute exact raw requirements for the complete 60-upgrade portfolio.
+    raw_needed = Counter()
+    components = Counter()
+
+    for upgrades in plan.values():
+        for upgrade in upgrades:
+            raw_needed.update(raw_requirements_for_upgrade(upgrade))
+            for component, qty in UPGRADES[upgrade]["components"].items():
+                components[component] += qty
+
+    sim = Simulator(data)
+
+    # Gather scarce construction inputs and move to the affinity workshop.
+    gather_raw_materials(sim, data, paths, raw_needed)
+
+    # Craft the entire dependency tree once. All components are then globally
+    # available in inventory for the later town builds.
+    craft_all_components(sim, components)
+
+    town_order = choose_town_order(data, paths)
+
+    # Build one complete town at a time. Financing is done just before each
+    # town, so Enteloot is invested quickly rather than unnecessarily hoarded.
+    for town in town_order:
+        if sim.tick >= sim.total_ticks:
+            break
+
+        town_cost = sum(UPGRADES[u]["cost"] for u in plan[town])
+        finance_at_ixtal(sim, town_cost, paths)
+
+        if sim.enteloot < town_cost:
+            # No valid way to fund this town within the remaining tick budget.
+            break
+
+        sim.travel(town, paths)
+
+        for upgrade in plan[town]:
+            if not sim.build(town, upgrade):
+                raise RuntimeError(
+                    f"Build failed: {town}/{upgrade} at tick {sim.tick}, "
+                    f"Enteloot={sim.enteloot}"
+                )
+
+    liquidate_remaining_time(sim, data, paths)
+
+    return sim.actions, sim
+
 
 def validate_submission(actions):
     if not isinstance(actions, list) or not actions:
         raise ValueError("actions must be a non-empty list")
-    for a in actions:
-        if not isinstance(a, dict) or "type" not in a:
-            raise ValueError(f"Malformed action: {a}")
-        t = a["type"]
-        if t == "travel":
-            if not isinstance(a.get("destination"), str):
-                raise ValueError(f"Malformed travel: {a}")
-        elif t in ("gather", "upkeep"):
-            pass
-        elif t in ("buy", "sell", "craft"):
-            if not isinstance(a.get("item"), str) or not isinstance(a.get("quantity"), int) or a["quantity"] <= 0:
-                raise ValueError(f"Malformed {t}: {a}")
-        elif t == "build":
-            if not isinstance(a.get("upgrade"), str):
-                raise ValueError(f"Malformed build: {a}")
-        else:
-            raise ValueError(f"Unknown action type: {t}")
 
-def write_submission(actions, output="submission.txt"):
+    for action in actions:
+        if not isinstance(action, dict) or "type" not in action:
+            raise ValueError(f"Malformed action: {action}")
+
+        kind = action["type"]
+
+        if kind == "travel":
+            if not isinstance(action.get("destination"), str):
+                raise ValueError(f"Malformed travel action: {action}")
+        elif kind in ("gather", "upkeep"):
+            pass
+        elif kind in ("buy", "sell", "craft"):
+            if (
+                not isinstance(action.get("item"), str)
+                or not isinstance(action.get("quantity"), int)
+                or action["quantity"] <= 0
+            ):
+                raise ValueError(f"Malformed {kind} action: {action}")
+        elif kind == "build":
+            if not isinstance(action.get("upgrade"), str):
+                raise ValueError(f"Malformed build action: {action}")
+        else:
+            raise ValueError(f"Unknown action type: {kind}")
+
+
+def write_submission(actions, filename):
     validate_submission(actions)
-    with open(output, "w", encoding="utf-8") as f:
+    with open(filename, "w", encoding="utf-8") as f:
         json.dump({"actions": actions}, f, indent=2)
+
 
 def main():
     input_file = sys.argv[1] if len(sys.argv) > 1 else "2.txt"
     output_file = sys.argv[2] if len(sys.argv) > 2 else "submission.txt"
 
     data = load_input(input_file)
-    plan = choose_upgrade_plan(data)
+    actions, sim = solve(data)
 
-    print("Level 2 optimisation")
-    print(f"Input: {input_file}")
-    print("Upgrade portfolio:")
-    for town, upgrades in plan.items():
-        print(f"  {town}: {', '.join(upgrades)}")
-
-    actions, tick, built, enteloot, inventory = solve(data)
     write_submission(actions, output_file)
 
-    built_count = sum(len(v) for v in built.values())
-    infra_score = sum(UPGRADES[u]["score"] for v in built.values() for u in v)
+    built_count = sum(len(v) for v in sim.built.values())
+    infrastructure = sum(
+        UPGRADES[u]["score"]
+        for upgrades in sim.built.values()
+        for u in upgrades
+    )
 
-    print(f"Generated actions: {len(actions)}")
-    print(f"Estimated execution tick: {tick}/{data['run']['total_ticks']}")
-    print(f"Estimated upgrades built: {built_count}")
-    print(f"Estimated infrastructure score: {infra_score}")
-    print(f"Estimated remaining Enteloot: {enteloot}")
+    print("Level 2 optimisation v4")
+    print(f"Input: {input_file}")
+    print(f"Actions: {len(actions)}")
+    print(f"Final estimated tick: {sim.tick}/{sim.total_ticks}")
+    print(f"Upgrades actually simulated: {built_count}/60")
+    print(f"Infrastructure score: {infrastructure}")
+    print(f"Enteloot remaining: {sim.enteloot}")
+    print("Upgrade distribution:")
+    for town in data["towns"]:
+        print(f"  {town}: {len(sim.built[town])}")
     print(f"Submission: {output_file}")
+
 
 if __name__ == "__main__":
     main()
