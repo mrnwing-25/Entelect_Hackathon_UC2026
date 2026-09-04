@@ -1,4 +1,4 @@
-# 🏰 Entelect Hackathons — University Cup 2
+# 🏰 Entelect University Cup 2
 
 ## Optimisation Challenge Preparation
 
